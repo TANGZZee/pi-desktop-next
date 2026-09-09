@@ -7,6 +7,9 @@ import { readdir, readFile, stat, writeFile } from 'node:fs/promises'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { createRequire } from 'node:module'
+import { DefaultResourceLoader } from '@earendil-works/pi-coding-agent'
+import { DEFAULT_MODE, effectiveToolsForMode, isAgentMode } from './policy.ts'
+import { createApprovalExtension } from './approval-extension.ts'
 
 const sessions = new Map()
 let runtime
@@ -15,6 +18,18 @@ const agentDir = path.join(os.homedir(), '.pi', 'agent')
 const execFileAsync = promisify(execFile)
 const require = createRequire(import.meta.url)
 const sdkVersion = require('../package.json').dependencies['@earendil-works/pi-coding-agent']
+
+// ask 模式确认桥：扩展 await → UI 回答
+const DEFAULT_TOOLS = ['read', 'bash', 'edit', 'write']
+const pendingConfirms = new Map()
+let confirmSeq = 0
+const confirmBridge = {
+  requestConfirm: ({ sessionId, toolName, summary }) => new Promise((resolve) => {
+    const confirmId = `c${++confirmSeq}`
+    pendingConfirms.set(confirmId, resolve)
+    send({ type: 'confirm_request', sessionId, confirmId, toolName, summary })
+  }),
+}
 
 function send(message) {
   process.stdout.write(`${JSON.stringify(message)}\n`)
@@ -43,18 +58,29 @@ async function ensureRuntime() {
   return runtime
 }
 
-async function createSession(id, cwd = workspace, thinking) {
+async function createSession(id, cwd = workspace, thinking, mode = DEFAULT_MODE) {
   const modelRuntime = await ensureRuntime()
+  const entryMode = isAgentMode(mode) ? mode : DEFAULT_MODE
+  const entry = { mode: entryMode }
+  const loader = new DefaultResourceLoader({
+    cwd,
+    agentDir,
+    extensionFactories: [createApprovalExtension({ getMode: () => entry.mode, sessionId: id, requestConfirm: confirmBridge.requestConfirm })],
+  })
+  await loader.reload()
   const { session } = await createAgentSession({
     cwd,
     agentDir,
     modelRuntime,
     sessionManager: SessionManager.create(cwd, path.join(agentDir, 'sessions')),
+    resourceLoader: loader,
+    tools: effectiveToolsForMode(entryMode, DEFAULT_TOOLS),
   })
   if (thinking) session.setThinkingLevel(thinking)
   const unsubscribe = session.subscribe((event) => send({ type: 'event', sessionId: id, event: summarizeEvent(event) }))
-  sessions.set(id, { session, unsubscribe, cwd })
-  return { id, sessionId: session.sessionId, cwd, file: session.sessionManager.getSessionFile() }
+  Object.assign(entry, { session, unsubscribe, cwd })
+  sessions.set(id, entry)
+  return { id, sessionId: session.sessionId, cwd, file: session.sessionManager.getSessionFile(), mode: entry.mode }
 }
 
 async function openSession(id, file) {
@@ -200,6 +226,22 @@ async function gitStatus(cwd = workspace) {
 async function gitDiff(cwd, file) {
   return git(cwd, ['diff', '--no-ext-diff', '--', file])
 }
+async function readAttachment(cwd, file) {
+  const root = path.resolve(cwd)
+  const absolute = path.resolve(root, file)
+  if (absolute !== root && !absolute.startsWith(`${root}${path.sep}`)) throw new Error('禁止读取工作区外的文件')
+  const info = await stat(absolute)
+  if (!info.isFile()) throw new Error('不是文件')
+  const ext = path.extname(absolute).toLowerCase()
+  const imageMimes = { '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.webp': 'image/webp', '.gif': 'image/gif' }
+  if (imageMimes[ext]) {
+    if (info.size > 8 * 1024 * 1024) throw new Error('图片超过 8 MB')
+    return { kind: 'image', name: path.basename(absolute), mimeType: imageMimes[ext], data: (await readFile(absolute)).toString('base64') }
+  }
+  if (info.size > 512 * 1024) throw new Error('文本文件超过 512 KB')
+  return { kind: 'text', name: path.basename(absolute), content: await readFile(absolute, 'utf8') }
+}
+
 async function handle(request) {
   const { id, type, payload = {} } = request
   try {
@@ -337,13 +379,40 @@ async function handle(request) {
     if (type === 'prompt') {
       let entry = sessions.get(payload.sessionId)
       if (!entry) {
-        await createSession(payload.sessionId, payload.cwd || workspace)
+        await createSession(payload.sessionId, payload.cwd || workspace, payload.thinking, payload.mode)
         entry = sessions.get(payload.sessionId)
       }
       if (!entry) throw new Error('无法创建 Agent 会话')
       // Do not await the whole turn: the UI must remain available for steering and abort.
-      void entry.session.prompt(payload.text, { streamingBehavior: payload.behavior || 'followUp' }).catch((error) => send({ type: 'event', sessionId: payload.sessionId, event: { type: 'error', message: error.message } }))
+      const attachments = Array.isArray(payload.attachments) ? payload.attachments : []
+      const images = attachments.filter((a) => a.kind === 'image').map((a) => ({ type: 'image', data: a.data, mimeType: a.mimeType }))
+      const textFiles = attachments.filter((a) => a.kind === 'text')
+      const text = textFiles.length ? `${payload.text}\n\n${textFiles.map((a) => `--- 附件：${a.name} ---\n${a.content}`).join('\n\n')}` : payload.text
+      const options = { streamingBehavior: payload.behavior || 'followUp' }
+      if (images.length) options.images = images
+      void entry.session.prompt(text, options).catch((error) => send({ type: 'event', sessionId: payload.sessionId, event: { type: 'error', message: error.message } }))
       reply(id, { accepted: true })
+      return
+    }
+    if (type === 'set_mode') {
+      const entry = sessions.get(payload.sessionId)
+      if (!isAgentMode(payload.mode)) throw new Error(`未知模式：${payload.mode}`)
+      if (entry) {
+        entry.mode = payload.mode
+        entry.session.setActiveToolsByName(effectiveToolsForMode(payload.mode, DEFAULT_TOOLS))
+      }
+      reply(id, { mode: payload.mode })
+      return
+    }
+    if (type === 'confirm_response') {
+      const resolve = pendingConfirms.get(payload.confirmId)
+      pendingConfirms.delete(payload.confirmId)
+      resolve?.(!!payload.ok)
+      reply(id, { delivered: !!resolve })
+      return
+    }
+    if (type === 'read_attachment') {
+      reply(id, await readAttachment(payload.cwd || workspace, payload.path))
       return
     }
     if (type === 'abort') {
