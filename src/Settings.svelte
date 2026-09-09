@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { onMount } from 'svelte'
   import { version } from '../package.json'
 
   type SettingsInfo = { node: string; sdk: string; agentDir: string; sessionDir: string; authProviders: string[] }
@@ -8,9 +9,9 @@
   export let info: SettingsInfo | null = null
   export let onclose: () => void = () => {}
   export let openDir: (path: string) => void = () => {}
-  export let openUrl: () => void = () => {}
-  export let workspacePath = '.'
-  export let chooseWorkspace: () => void = () => {}
+  export let workspacePath: string | undefined = undefined
+  export let onChooseWorkspace: (() => void) | undefined = undefined
+  export let onOpenRepo: (() => void) | undefined = undefined
 
   const SHELLS: Array<[string, string, string]> = [
     ['cmd', 'cmd', 'Windows 命令提示符'],
@@ -19,12 +20,16 @@
   ]
 
   const THINKING_LEVELS = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']
-  const THINKING_LABELS: Record<string, string> = { off: '关', minimal: '极低', low: '低', medium: '中', high: '高', xhigh: '超高', max: '最大' }
+  const THINKING_LABELS: Record<string, string> = { off: 'off', minimal: '极低', low: '低', medium: '中', high: '高', xhigh: '超高', max: '最大' }
 
   let autoName = localStorage.getItem('pdn.autoname') !== '0'
   let shell = localStorage.getItem('pdn.shell') || 'cmd'
-  const storedThinking = localStorage.getItem('pdn.thinking')
-  let thinking = THINKING_LEVELS.includes(storedThinking || '') ? (storedThinking as string) : 'medium'
+  let thinking = 'medium'
+
+  onMount(() => {
+    const stored = localStorage.getItem('pdn.thinking')
+    if (stored && THINKING_LEVELS.includes(stored)) thinking = stored
+  })
 
   function setAutoName(checked: boolean) {
     autoName = checked
@@ -42,7 +47,7 @@
   }
 
   function workspaceBase() {
-    if (workspacePath === '.') return '当前目录'
+    if (!workspacePath || workspacePath === '.') return '未选择'
     return workspacePath.split(/[\\/]/).pop() || workspacePath
   }
 </script>
@@ -69,8 +74,10 @@
           </div>
           <div class="row">
             <span class="k">当前工作区</span>
-            <span class="path" title={workspacePath}>{workspaceBase()}</span>
-            <button on:click={chooseWorkspace}>更换</button>
+            <span class="path" title={workspacePath ?? ''}>{workspaceBase()}</span>
+            {#if onChooseWorkspace}
+              <button on:click={onChooseWorkspace}>更换</button>
+            {/if}
           </div>
           <div class="row"><span class="k">Node 版本</span><span class="v">{info?.node ?? '—'}</span></div>
           <div class="row"><span class="k">Pi SDK 版本</span><span class="v">{info?.sdk ?? '—'}</span></div>
@@ -118,7 +125,7 @@
           <h3>对话</h3>
           <label class="think-row">
             <span>新会话默认思考档位</span>
-            <input type="range" min="0" max={THINKING_LEVELS.length - 1} step="1" value={THINKING_LEVELS.indexOf(thinking)} on:change={(event) => setThinking(THINKING_LEVELS[Number((event.currentTarget as HTMLInputElement).value)])} />
+            <input type="range" min="0" max={THINKING_LEVELS.length - 1} step="1" value={THINKING_LEVELS.indexOf(thinking)} on:input={(event) => setThinking(THINKING_LEVELS[Number((event.currentTarget as HTMLInputElement).value)])} />
             <span class="think-value">{THINKING_LABELS[thinking] ?? thinking}</span>
           </label>
           <p class="desc">新建会话时默认应用的思考档位，可随时在输入栏调整。</p>
@@ -141,7 +148,13 @@
           <h3>关于</h3>
           <div class="row"><span class="k">版本</span><span class="v">v{version}</span></div>
           <div class="row"><span class="k">技术栈</span><span class="v">Tauri 2 · Svelte 5 · Pi SDK 0.84</span></div>
-          <div class="row"><span class="k">仓库</span><span class="v link">https://github.com/TANGZZee/pi-desktop-next</span><button disabled={!connected} on:click={openUrl}>打开仓库</button></div>
+          <div class="row">
+            <span class="k">仓库</span>
+            <span class="v link">https://github.com/TANGZZee/pi-desktop-next</span>
+            {#if onOpenRepo}
+              <button on:click={onOpenRepo}>打开仓库</button>
+            {/if}
+          </div>
         </section>
       </div>
     </div>

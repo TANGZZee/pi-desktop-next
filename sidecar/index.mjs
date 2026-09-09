@@ -333,7 +333,7 @@ async function handle(request) {
         reply(id, { id: pid, sessionId: existing.session.sessionId, cwd: existing.cwd, file: existing.file })
         return
       }
-      reply(id, await createSession(pid, payload.cwd || workspace, payload.thinking))
+      reply(id, await createSession(pid, payload.cwd || workspace, payload.thinking, payload.mode))
       return
     }
     if (type === 'session_stats') {
@@ -416,7 +416,12 @@ async function handle(request) {
       return
     }
     if (type === 'abort') {
-      await sessions.get(payload.sessionId)?.session.abort()
+      const entry = sessions.get(payload.sessionId)
+      await entry?.session.abort()
+      for (const [confirmId, resolve] of pendingConfirms) {
+        pendingConfirms.delete(confirmId)
+        resolve(false)
+      }
       reply(id, { aborted: true })
       return
     }

@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount } from 'svelte'
+  import { onDestroy, onMount } from 'svelte'
   import { invoke } from '@tauri-apps/api/core'
   import { listen } from '@tauri-apps/api/event'
   import { open, confirm } from '@tauri-apps/plugin-dialog'
@@ -8,12 +8,12 @@
   import { version } from '../package.json'
 
   type PanelTab = '文档' | '变更' | '终端' | '运行'
-  type Session = { id: string; title: string; time: string; file?: string; state?: 'active' | 'done'; model?: string; thinking?: string }
+  type Session = { id: string; title: string; time: string; file?: string; state?: 'active' | 'done'; model?: string; thinking?: string; mode?: string }
   type ModelInfo = { provider: string; id: string; name: string; reasoning: boolean }
   type GitChange = { code: string; path: string }
   type SidecarResponse = { type: 'response'; id: number; ok: boolean; result: unknown; error?: string }
   type SentMessage = { text: string; at: string }
-  type RunSlot = { reply: string; thinking: string; tool: string; running: boolean; queue: string[]; sent: SentMessage[] }
+  type RunSlot = { reply: string; thinking: string; tool: string; running: boolean; queue: string[]; sent: SentMessage[]; confirm?: { confirmId: string; toolName: string; summary: string } }
   type SettingsInfo = { node: string; sdk: string; agentDir: string; sessionDir: string; authProviders: string[] }
   type CtxStats = { currentContext: number; window: number; totals: { input: number; output: number; cacheRead: number; cacheWrite: number; total: number }; costUsd: number; cacheHitRate: number }
   const CTX_CIRC = 2 * Math.PI * 7
@@ -54,11 +54,30 @@
   let ctxOpen = false
   let ctxMenuUp = false
   let ctxButtonRef: HTMLButtonElement
+  let thinkingOpen = false
+  let thinkingMenuUp = false
+  let thinkingButtonRef: HTMLButtonElement
+  let modeOpen = false
+  let modeMenuUp = false
+  let modeButtonRef: HTMLButtonElement
+  let attachments: Array<{ kind: 'image' | 'text'; name: string; mimeType?: string; data?: string; content?: string }> = []
+  let attachError = ''
+  let leftWidth = 238
+  let rightWidth = 344
+  let dragging: 'left' | 'right' | null = null
+  let dragStartX = 0
+  let dragStartWidth = 0
   // 与 SDK 保持一致：THINKING_LEVEL_OPTIONS / DEFAULT_THINKING_LEVEL
   const MODEL_SEPARATOR = '\u0000'
   const THINKING_LEVELS = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']
   const THINKING_LABELS: Record<string, string> = { off: '关', minimal: '极低', low: '低', medium: '中', high: '高', xhigh: '超高', max: '最大' }
   const DEFAULT_THINKING = 'medium'
+  const MODE_LABELS: Record<string, string> = { plan: '计划', ask: '默认', full: '完全访问' }
+  const MODE_OPTIONS: Array<{ value: string; label: string; desc: string }> = [
+    { value: 'plan', label: '计划', desc: '只读探索，不改任何文件' },
+    { value: 'ask', label: '默认', desc: '写与命令逐次确认' },
+    { value: 'full', label: '完全访问', desc: '不拦截，仅建议可信项目' }
+  ]
   const pending = new Map<number, (value: SidecarResponse) => void>()
   let requestSequence = 0
 
@@ -66,13 +85,15 @@
   $: filteredFiles = files.filter((item) => item.path.toLowerCase().includes(query.toLowerCase()))
   $: currentModelKey = modelChoice(models, sessions, activeSessionId)
   $: currentModel = models.find((item) => modelKey(item) === currentModelKey)
-  $: currentModelLabel = currentModel ? (currentModel.name.length > 14 ? `${currentModel.name.slice(0, 14)}…` : currentModel.name) : '选择模型'
+  $: currentModelLabel = currentModel ? currentModel.name : '选择模型'
   $: modelFilter = modelQuery.trim().toLowerCase()
   $: modelMatches = modelFilter ? models.filter((item) => item.name.toLowerCase().includes(modelFilter) || item.provider.toLowerCase().includes(modelFilter)) : models
   $: modelDropdownGroups = modelGroups(modelMatches)
   $: currentThinking = thinkingChoice(sessions, activeSessionId)
+  $: currentMode = sessionMode(sessions, activeSessionId)
   $: thinkingIndex = Math.max(0, THINKING_LEVELS.indexOf(currentThinking))
   $: thinkingLabel = THINKING_LABELS[currentThinking] ?? currentThinking
+  $: if (typeof document !== 'undefined') document.body.classList.toggle('resizing', dragging !== null)
 
   function emptySlot(): RunSlot {
     return { reply: '', thinking: '', tool: '', running: false, queue: [], sent: [] }
@@ -129,6 +150,10 @@
 
   function thinkingChoice(records: Session[], id: string) {
     return records.find((item) => item.id === id)?.thinking ?? DEFAULT_THINKING
+  }
+
+  function sessionMode(records: Session[], id: string) {
+    return records.find((item) => item.id === id)?.mode ?? 'ask'
   }
 
   function workspaceBase() {
@@ -198,9 +223,131 @@
     }
   }
 
+  function clickOutsideThinking(node: HTMLElement) {
+    function onMouseDown(event: MouseEvent) {
+      if (!node.contains(event.target as Node)) thinkingOpen = false
+    }
+    function onKeydown(event: KeyboardEvent) {
+      if (event.key === 'Escape') thinkingOpen = false
+    }
+    window.addEventListener('mousedown', onMouseDown)
+    window.addEventListener('keydown', onKeydown)
+    return {
+      destroy() {
+        window.removeEventListener('mousedown', onMouseDown)
+        window.removeEventListener('keydown', onKeydown)
+      }
+    }
+  }
+
+  function clickOutsideMode(node: HTMLElement) {
+    function onMouseDown(event: MouseEvent) {
+      if (!node.contains(event.target as Node)) modeOpen = false
+    }
+    function onKeydown(event: KeyboardEvent) {
+      if (event.key === 'Escape') modeOpen = false
+    }
+    window.addEventListener('mousedown', onMouseDown)
+    window.addEventListener('keydown', onKeydown)
+    return {
+      destroy() {
+        window.removeEventListener('mousedown', onMouseDown)
+        window.removeEventListener('keydown', onKeydown)
+      }
+    }
+  }
+
+  function toggleMode() {
+    modeOpen = !modeOpen
+    if (modeOpen) {
+      modelOpen = false
+      thinkingOpen = false
+      ctxOpen = false
+      const rect = modeButtonRef?.getBoundingClientRect()
+      if (rect) modeMenuUp = window.innerHeight - rect.bottom < 220
+    }
+  }
+
+  async function setMode(mode: string) {
+    modeOpen = false
+    if (!mode) return
+    const id = ensureActiveId()
+    remember(id, { mode })
+    if (!sidecarReady || !sessions.some((item) => item.id === id && item.file)) return
+    await request('set_mode', { sessionId: id, mode })
+  }
+
+  function toggleThinking() {
+    thinkingOpen = !thinkingOpen
+    if (thinkingOpen) {
+      modelOpen = false
+      modeOpen = false
+      ctxOpen = false
+      const rect = thinkingButtonRef?.getBoundingClientRect()
+      if (rect) thinkingMenuUp = window.innerHeight - rect.bottom < 220
+    }
+  }
+
+  function clampWidth(value: number, min: number, max: number) {
+    return Math.min(max, Math.max(min, value))
+  }
+
+  function startDrag(event: MouseEvent, side: 'left' | 'right') {
+    event.preventDefault()
+    dragging = side
+    dragStartX = event.clientX
+    dragStartWidth = side === 'left' ? leftWidth : rightWidth
+    window.addEventListener('mousemove', onDragMove)
+    window.addEventListener('mouseup', stopDrag)
+  }
+
+  function onDragMove(event: MouseEvent) {
+    if (!dragging) return
+    const delta = event.clientX - dragStartX
+    if (dragging === 'left') leftWidth = clampWidth(dragStartWidth + delta, 180, 480)
+    else rightWidth = clampWidth(dragStartWidth - delta, 240, 480)
+  }
+
+  function stopDrag() {
+    dragging = null
+    window.removeEventListener('mousemove', onDragMove)
+    window.removeEventListener('mouseup', stopDrag)
+  }
+
+  function resetDrag(side: 'left' | 'right') {
+    if (side === 'left') leftWidth = 238
+    else rightWidth = 344
+  }
+
+  // 窗口变窄时收回侧栏宽度，避免左/右栏与聊天区合计超出窗口
+  function clampToViewport() {
+    if (window.innerWidth <= 1050) return
+    const grid = document.querySelector('.app-grid') as HTMLElement | null
+    const total = grid?.clientWidth ?? window.innerWidth
+    let left = showLeft ? leftWidth : 0
+    let right = showRight ? rightWidth : 0
+    let overflow = left + right + 430 - total
+    if (overflow <= 0) return
+    const rightCut = Math.min(overflow, Math.max(0, right - 240))
+    right -= rightCut
+    overflow -= rightCut
+    if (overflow > 0) left = Math.max(180, left - overflow)
+    if (showRight) rightWidth = right
+    if (showLeft) leftWidth = left
+  }
+
+  onDestroy(() => {
+    stopDrag()
+    window.removeEventListener('resize', clampToViewport)
+    if (typeof document !== 'undefined') document.body.classList.remove('resizing')
+  })
+
   function toggleCtx() {
     ctxOpen = !ctxOpen
     if (ctxOpen) {
+      modelOpen = false
+      thinkingOpen = false
+      modeOpen = false
       const rect = ctxButtonRef?.getBoundingClientRect()
       if (rect) ctxMenuUp = window.innerHeight - rect.bottom < 320
       void refreshCtxStats()
@@ -234,6 +381,9 @@
   function toggleModel() {
     modelOpen = !modelOpen
     if (modelOpen) {
+      thinkingOpen = false
+      modeOpen = false
+      ctxOpen = false
       modelQuery = ''
       const rect = modelButtonRef?.getBoundingClientRect()
       if (rect) modelMenuUp = window.innerHeight - rect.bottom < 360
@@ -290,10 +440,15 @@
   }
 
   onMount(async () => {
+    window.addEventListener('resize', clampToViewport)
+    clampToViewport()
     const unlisten = await listen<AgentEnvelope>('agent-message', ({ payload }) => {
       if (payload.type === 'response' && payload.id) {
         pending.get(payload.id)?.(payload)
         pending.delete(payload.id)
+      }
+      if (payload.type === 'confirm_request') {
+        patchSlot(payload.sessionId || activeSessionId, { confirm: { confirmId: String(payload.confirmId ?? ''), toolName: String(payload.toolName ?? ''), summary: String(payload.summary ?? '') } })
       }
       if (payload.type === 'event') {
         const event = payload.event
@@ -309,7 +464,7 @@
         if (event.type === 'tool_execution_start') patchSlot(id, { tool: `正在执行 ${event.toolName || '工具'}…` })
         if (event.type === 'tool_execution_end') patchSlot(id, { tool: `${event.toolName || '工具'} 已完成` })
         if (event.type === 'agent_start') { patchSlot(id, { running: true }); markSession(id, 'active') }
-        if (event.type === 'agent_end' || event.type === 'error') { patchSlot(id, { running: false, tool: '' }); markSession(id, 'done'); void refreshCtxStats() }
+        if (event.type === 'agent_end' || event.type === 'error') { patchSlot(id, { running: false, tool: '', confirm: undefined }); markSession(id, 'done'); void refreshCtxStats() }
       }
     })
     try {
@@ -426,8 +581,32 @@
     if (sidecarReady && path) void request('open_dir', { path })
   }
 
-  function openUrl() {
-    if (sidecarReady) void request('open_url')
+  async function addAttachments() {
+    if (!sidecarReady) return
+    attachError = ''
+    const selected = await open({ multiple: true, title: '添加附件' })
+    if (!selected) return
+    const paths = Array.isArray(selected) ? selected : [selected]
+    for (const path of paths) {
+      const res = await requestRaw('read_attachment', { cwd: workspacePath, path })
+      if (!res.ok) {
+        attachError = res.error || '附件读取失败'
+        continue
+      }
+      attachments = [...attachments, res.result as { kind: 'image' | 'text'; name: string; mimeType?: string; data?: string; content?: string }]
+    }
+  }
+
+  function removeAttachment(index: number) {
+    attachments = attachments.filter((_, i) => i !== index)
+  }
+
+  function answerConfirm(ok: boolean) {
+    const id = activeSessionId
+    const confirm = runState[id]?.confirm
+    if (!confirm) return
+    patchSlot(id, { confirm: undefined })
+    if (sidecarReady) void request('confirm_response', { confirmId: confirm.confirmId, ok })
   }
 
   async function openSettings() {
@@ -467,11 +646,14 @@
       queue: behavior === 'followUp' ? [...slot.queue, text] : slot.queue
     })
     if (sidecarReady) {
+      const files = attachments
+      attachments = []
+      attachError = ''
       void (async () => {
         const rec = sessions.find((item) => item.id === id)
         if (!rec?.file) {
           const rawThinking = rec?.thinking ?? localStorage.getItem('pdn.thinking') ?? undefined
-          const payload: Record<string, unknown> = { sessionId: id, cwd: workspacePath }
+          const payload: Record<string, unknown> = { sessionId: id, cwd: workspacePath, mode: rec?.mode ?? 'ask' }
           if (rawThinking && THINKING_LEVELS.includes(rawThinking)) payload.thinking = rawThinking
           const created = await request('create_session', payload) as { id: string; file?: string } | null
           if (created?.file) remember(id, { file: created.file })
@@ -481,7 +663,7 @@
             await request('set_model', { sessionId: id, provider, modelId })
           }
         }
-        await request('prompt', { sessionId: id, text, cwd: workspacePath, behavior })
+        await request('prompt', { sessionId: id, text, cwd: workspacePath, behavior, attachments: files })
       })()
         .then(() => { if (newTitle) void request('rename_session', { sessionId: id, name: newTitle }) })
         .catch(() => patchSlot(id, { running: false }))
@@ -528,7 +710,7 @@
       </div>
     </header>
 
-    <div class="app-grid">
+    <div class="app-grid" style={`grid-template-columns:${showLeft ? leftWidth : 0}px minmax(430px, 1fr) ${showRight ? rightWidth : 0}px`}>
       <aside class="sidebar" class:collapsed={!showLeft}>
         <div class="sidebar-head">
           <button class="new-button" on:click={async () => {
@@ -620,14 +802,23 @@
             {#if runState[activeSessionId]?.tool}<div class="tool-live"><span>◌</span> {runState[activeSessionId]?.tool}</div>{/if}
             {#if (runState[activeSessionId]?.queue ?? []).length}<div class="queue-live">⌁ 已排队 {(runState[activeSessionId]?.queue ?? []).length} 条消息（Alt+Enter）</div>{/if}
             {#if runState[activeSessionId]?.reply}<div class="message assistant-message"><div class="message-meta"><span class="assistant-avatar">π</span><strong>Pi Agent</strong><span>实时回复</span></div><p>{runState[activeSessionId]?.reply}</p></div>{/if}
+            {#if runState[activeSessionId]?.confirm}
+              <div class="confirm-card">
+                <div class="confirm-head"><span class="confirm-tool">{runState[activeSessionId]?.confirm?.toolName}</span><span class="confirm-summary">{runState[activeSessionId]?.confirm?.summary}</span></div>
+                <div class="confirm-actions"><button class="confirm-allow" on:click={() => answerConfirm(true)}>允许</button><button on:click={() => answerConfirm(false)}>拒绝</button></div>
+              </div>
+            {/if}
             {#if runState[activeSessionId]?.running}<div class="running-line"><span class="spinner"></span> Agent 正在处理…</div>{/if}
           {/if}
         </div>
 
         <div class="composer-wrap">
+          {#if currentMode === 'plan'}<div class="plan-hint">计划模式：Agent 只能读和搜索，不会修改文件</div>{/if}
           <div class="composer">
+            {#if attachError}<div class="git-error attach-error">{attachError}</div>{/if}
+            {#if attachments.length}<div class="attach-chips">{#each attachments as attachment, index (index)}<span class="attach-chip" class:image={attachment.kind === 'image'}>{#if attachment.kind === 'image'}<i></i>{/if}<span class="attach-name">{attachment.name}</span><button aria-label="移除附件" on:click={() => removeAttachment(index)}>×</button></span>{/each}</div>{/if}
             <textarea bind:this={composerInput} bind:value={inputText} on:keydown={handleKeydown} placeholder="输入消息…" rows="2"></textarea>
-            <div class="composer-toolbar"><div class="composer-left"><div class="model-dropdown" use:clickOutside><button class="model-button" bind:this={modelButtonRef} disabled={!models.length} aria-haspopup="listbox" aria-expanded={modelOpen} aria-label="模型" on:click={toggleModel}><span>{currentModelLabel}</span><svg width="8" height="8" viewBox="0 0 8 8" fill="none" aria-hidden="true"><path d="M1.5 2.5 4 5l2.5-2.5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></svg></button>{#if modelOpen}<div class="model-menu" class:up={modelMenuUp}><div class="model-search"><span>⌕</span><input bind:this={modelSearchInput} bind:value={modelQuery} placeholder="搜索模型…" aria-label="搜索模型" /></div><div class="model-list">{#each modelDropdownGroups as group (group.provider)}<div class="model-group-title">{group.provider}</div>{#each group.items as model (modelKey(model))}<button class="model-option" class:selected={modelKey(model) === currentModelKey} on:click={() => pickModel(model)}><span class="model-dot"></span><span class="model-name">{model.name}</span></button>{/each}{:else}<div class="model-empty">没有匹配的模型</div>{/each}</div></div>{/if}</div><label class="thinking-slider"><span class="thinking-label">思考</span><input type="range" min="0" max={THINKING_LEVELS.length - 1} step="1" value={thinkingIndex} disabled={!sidecarReady} aria-label="思考档位" on:change={chooseThinking} /><span class="thinking-value">{thinkingLabel}</span></label></div><div class="composer-right"><div class="ctx-dropdown" use:clickOutsideCtx><button class="ctx-button" bind:this={ctxButtonRef} disabled={!sidecarReady || !activeSessionId} aria-label="上下文用量" aria-haspopup="true" aria-expanded={ctxOpen} on:click={toggleCtx}><svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true"><circle cx="9" cy="9" r="7" fill="none" stroke="#e4e7e3" stroke-width="2"/>{#if ctxStats?.window}<circle cx="9" cy="9" r="7" fill="none" stroke="#5f8466" stroke-width="2" stroke-linecap="round" stroke-dasharray={ctxDash()} transform="rotate(-90 9 9)"/>{/if}</svg></button>{#if ctxOpen}<div class="ctx-menu" class:up={ctxMenuUp}><div class="ctx-head"><strong>上下文容量（估算）</strong><span>{ctxProgress()}%</span></div><div class="ctx-row"><span>当前上下文</span><span>{fmtWan(ctxStats.currentContext)}</span></div><div class="ctx-row"><span>可用容量</span><span>{fmtWan(Math.max(0, ctxStats.window - ctxStats.currentContext))}</span></div><div class="ctx-row"><span>上下文窗口</span><span>{fmtWan(ctxStats.window)}</span></div><div class="ctx-bar"><i style="width:{ctxProgress()}%"></i></div><div class="ctx-divider"></div><div class="ctx-sub">本会话累计</div><div class="ctx-row"><span>总 Token</span><span>{fmtWan(ctxStats.totals.total)}</span></div><div class="ctx-row"><span>输入</span><span>{fmtWan(ctxStats.totals.input)}</span></div><div class="ctx-row"><span>输出</span><span>{fmtWan(ctxStats.totals.output)}</span></div><div class="ctx-row"><span>缓存读取</span><span>{fmtWan(ctxStats.totals.cacheRead)}</span></div><div class="ctx-row"><span>缓存写入</span><span>{fmtWan(ctxStats.totals.cacheWrite)}</span></div><div class="ctx-divider"></div><div class="ctx-row"><span>本地费率估算</span><span>${ctxStats.costUsd.toFixed(2)}</span></div><div class="ctx-row"><span>平均缓存命中率</span><span>{(ctxStats.cacheHitRate * 100).toFixed(1)}%</span></div><div class="ctx-note">按本地模型费率估算，未提供费率则为 0</div></div>{/if}</div><span class="hint">Enter 插话 · Alt+Enter 排队</span><button class:stop={runState[activeSessionId]?.running} class="send" on:click={runState[activeSessionId]?.running ? stop : () => submit('steer')}>{runState[activeSessionId]?.running ? '停止' : '发送'} <span>{runState[activeSessionId]?.running ? '■' : '↑'}</span></button></div></div>
+            <div class="composer-toolbar"><div class="composer-left"><button class="attach-button" disabled={!sidecarReady} aria-label="添加附件" on:click={() => void addAttachments()}><svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" aria-hidden="true"><line x1="8" y1="3" x2="8" y2="13"/><line x1="3" y1="8" x2="13" y2="8"/></svg></button><div class="mode-dropdown" use:clickOutsideMode><button class="mode-button" class:plan={currentMode === 'plan'} bind:this={modeButtonRef} aria-haspopup="true" aria-expanded={modeOpen} aria-label="权限模式" on:click={toggleMode}><svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round" aria-hidden="true"><path d="M8 1.8 13.5 3.6v4.1c0 3.2-2.2 5.6-5.5 6.6-3.3-1-5.5-3.4-5.5-6.6V3.6L8 1.8Z"/></svg><span>{MODE_LABELS[currentMode] ?? currentMode}</span></button>{#if modeOpen}<div class="mode-menu" class:up={modeMenuUp}>{#each MODE_OPTIONS as option (option.value)}<button class="mode-option" class:selected={option.value === currentMode} on:click={() => void setMode(option.value)}><span class="mode-dot"></span><span class="mode-copy"><strong>{option.label}</strong><small>{option.desc}</small></span></button>{/each}</div>{/if}</div><div class="model-dropdown" use:clickOutside><button class="model-button" bind:this={modelButtonRef} disabled={!models.length} aria-haspopup="listbox" aria-expanded={modelOpen} aria-label="模型" on:click={toggleModel}><span>{currentModelLabel}</span><svg width="8" height="8" viewBox="0 0 8 8" fill="none" aria-hidden="true"><path d="M1.5 2.5 4 5l2.5-2.5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></svg></button>{#if modelOpen}<div class="model-menu" class:up={modelMenuUp}><div class="model-search"><span>⌕</span><input bind:this={modelSearchInput} bind:value={modelQuery} placeholder="搜索模型…" aria-label="搜索模型" /></div><div class="model-list">{#each modelDropdownGroups as group (group.provider)}<div class="model-group-title">{group.provider}</div>{#each group.items as model (modelKey(model))}<button class="model-option" class:selected={modelKey(model) === currentModelKey} on:click={() => pickModel(model)}><span class="model-dot"></span><span class="model-name">{model.name}</span></button>{/each}{:else}<div class="model-empty">没有匹配的模型</div>{/each}</div></div>{/if}</div><div class="thinking-dropdown" use:clickOutsideThinking><button class="thinking-button" bind:this={thinkingButtonRef} disabled={!sidecarReady} aria-haspopup="true" aria-expanded={thinkingOpen} aria-label="思考深度" on:click={toggleThinking}><span>思考：{thinkingLabel}</span><svg width="8" height="8" viewBox="0 0 8 8" fill="none" aria-hidden="true"><path d="M1.5 2.5 4 5l2.5-2.5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></svg></button>{#if thinkingOpen}<div class="thinking-menu" class:up={thinkingMenuUp}><div class="thinking-head"><strong>思考深度</strong><span>{thinkingLabel}</span></div><input class="thinking-range" type="range" min="0" max={THINKING_LEVELS.length - 1} step="1" value={thinkingIndex} aria-label="思考档位" on:change={chooseThinking} /><div class="thinking-ticks">{#each THINKING_LEVELS as level (level)}<i class:on={level === currentThinking}></i>{/each}</div><div class="thinking-ends"><span>更快</span><span>更聪明</span></div></div>{/if}</div></div><div class="composer-right"><div class="ctx-dropdown" use:clickOutsideCtx><button class="ctx-button" class:empty={!activeSessionId || !ctxStats?.window} bind:this={ctxButtonRef} disabled={!sidecarReady} aria-label="上下文用量" aria-haspopup="true" aria-expanded={ctxOpen} on:click={toggleCtx}><svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true"><circle cx="9" cy="9" r="7" fill="none" stroke="currentColor" stroke-width="2"/>{#if ctxStats?.window}<circle cx="9" cy="9" r="7" fill="none" stroke="#5f8466" stroke-width="2" stroke-linecap="round" stroke-dasharray={ctxDash()} transform="rotate(-90 9 9)"/>{/if}</svg></button>{#if ctxOpen}<div class="ctx-menu" class:up={ctxMenuUp}>{#if !activeSessionId}<div class="ctx-empty"><strong>本会话尚未开始</strong><small>发送第一条消息后显示用量</small></div>{:else if !ctxStats?.window}<div class="ctx-empty"><strong>暂无用量数据</strong><small>发送消息后显示上下文占用</small></div>{:else}<div class="ctx-head"><strong>上下文容量（估算）</strong><span>{ctxProgress()}%</span></div><div class="ctx-row"><span>当前上下文</span><span>{fmtWan(ctxStats.currentContext)}</span></div><div class="ctx-row"><span>可用容量</span><span>{fmtWan(Math.max(0, ctxStats.window - ctxStats.currentContext))}</span></div><div class="ctx-row"><span>上下文窗口</span><span>{fmtWan(ctxStats.window)}</span></div><div class="ctx-bar"><i style="width:{ctxProgress()}%"></i></div><div class="ctx-divider"></div><div class="ctx-sub">本会话累计</div><div class="ctx-row"><span>总 Token</span><span>{fmtWan(ctxStats.totals.total)}</span></div><div class="ctx-row"><span>输入</span><span>{fmtWan(ctxStats.totals.input)}</span></div><div class="ctx-row"><span>输出</span><span>{fmtWan(ctxStats.totals.output)}</span></div><div class="ctx-row"><span>缓存读取</span><span>{fmtWan(ctxStats.totals.cacheRead)}</span></div><div class="ctx-row"><span>缓存写入</span><span>{fmtWan(ctxStats.totals.cacheWrite)}</span></div><div class="ctx-divider"></div><div class="ctx-row"><span>本地费率估算</span><span>${ctxStats.costUsd.toFixed(2)}</span></div><div class="ctx-row"><span>平均缓存命中率</span><span>{(ctxStats.cacheHitRate * 100).toFixed(1)}%</span></div><div class="ctx-note">按本地模型费率估算，未提供费率则为 0</div>{/if}</div>{/if}</div><span class="hint">Enter 插话 · Alt+Enter 排队</span><button class:stop={runState[activeSessionId]?.running} class="send" on:click={runState[activeSessionId]?.running ? stop : () => submit('steer')}>{runState[activeSessionId]?.running ? '停止' : '发送'} <span>{runState[activeSessionId]?.running ? '■' : '↑'}</span></button></div></div>
           </div>
           <div class="composer-note">Pi Agent 可以读取和修改当前工作区中的文件</div>
         </div>
@@ -688,8 +879,16 @@
           <div class="panel-content"><div class="panel-title"><div><strong>运行中的任务</strong><small>当前没有后台进程</small></div></div><div class="empty-panel"><span>◌</span><strong>暂无运行任务</strong><small>Agent 启动开发服务器后会显示在这里</small></div></div>
         {/if}
       </aside>
+      {#if showLeft}
+        <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+        <div class="drag-handle" class:dragging={dragging === 'left'} style={`left:${leftWidth - 2.5}px`} role="separator" aria-label="调整左侧栏宽度" on:mousedown={(event) => startDrag(event, 'left')} on:dblclick={() => resetDrag('left')}></div>
+      {/if}
+      {#if showRight}
+        <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+        <div class="drag-handle" class:dragging={dragging === 'right'} style={`right:${rightWidth - 2.5}px`} role="separator" aria-label="调整右侧栏宽度" on:mousedown={(event) => startDrag(event, 'right')} on:dblclick={() => resetDrag('right')}></div>
+      {/if}
     </div>
     <footer class="statusbar"><span title={workspacePath}>{workspaceBase()}</span><span>{statusText()}</span><span>{sessions.length} 个会话 · 保存至 ~/.pi/agent/sessions</span></footer>
   </div>
-  <Settings open={showSettings} connected={sidecarReady} info={settingsInfo} onclose={() => (showSettings = false)} openDir={openDir} openUrl={openUrl} workspacePath={workspacePath} chooseWorkspace={chooseWorkspace} />
+  <Settings open={showSettings} connected={sidecarReady} info={settingsInfo} onclose={() => (showSettings = false)} openDir={openDir} workspacePath={workspacePath} onChooseWorkspace={chooseWorkspace} onOpenRepo={() => void request('open_url', { url: 'https://github.com/TANGZZee/pi-desktop-next' })} />
 </div>
