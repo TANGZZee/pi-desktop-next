@@ -6,7 +6,7 @@
 
   type PanelTab = '文档' | '变更' | '终端' | '运行'
   type Session = { id: string; title: string; time: string; file?: string; state?: 'active' | 'done' }
-  type AgentEnvelope = { type: string; id?: number; ok?: boolean; result?: unknown; error?: string; sessionId?: string; event?: { type?: string; delta?: string; text?: string; thinking?: string; toolName?: string; partialResult?: unknown; result?: unknown; message?: string } }
+  type GitChange = { code: string; path: string }
 
   let sessions: Session[] = [
     { id: 'main', title: '设计 pi-agent 桌面端', time: '刚刚', state: 'active' },
@@ -23,6 +23,9 @@
   let files: Array<{ path: string; kind: 'file' | 'directory' }> = []
   let selectedFile = ''
   let fileContent = ''
+  let editingFile = false
+  let gitChanges: GitChange[] = []
+  let diffContent = ''
   let inputText = ''
   let showThinking = false
   let isRunning = false
@@ -62,6 +65,7 @@
       await request('init', { cwd: '.' })
       sidecarReady = true
       await loadFiles()
+      await refreshGit()
       const loaded = await request('list_sessions', { cwd: '.' }) as Array<{ id: string; title: string; file: string; modifiedAt: number }>
       if (loaded?.length) {
         sessions = loaded.map((item) => ({ id: item.id, title: item.title, file: item.file, time: new Date(item.modifiedAt).toLocaleDateString() }))
@@ -84,14 +88,34 @@
     const selected = await open({ directory: true, multiple: false, title: '选择 Pi Agent 项目' })
     if (typeof selected !== 'string') return
     workspacePath = selected
-    if (sidecarReady) {
-      await request('set_workspace', { cwd: selected })
-      await loadFiles(selected)
-    }
+    selectedFile = ''
+    fileContent = ''
+    await request('set_workspace', { cwd: selected })
+    await loadFiles(selected)
+    await refreshGit()
+
   }
 
+  async function refreshGit() {
+    if (!sidecarReady) return
+    gitChanges = await request('git_status', { cwd: workspacePath }) as GitChange[]
+  }
+
+  async function loadDiff(file: string) {
+    if (!sidecarReady) return
+    diffContent = await request('git_diff', { cwd: workspacePath, path: file }) as string
+    panel = '变更'
+  }
+
+  async function saveFile() {
+    if (!selectedFile || !sidecarReady) return
+    await request('write_file', { cwd: workspacePath, path: selectedFile, content: fileContent })
+    editingFile = false
+    await refreshGit()
+  }
   async function previewFile(file: string) {
     selectedFile = file
+    editingFile = false
     if (sidecarReady) {
       const result = await request('read_file', { cwd: workspacePath, path: file }) as { content: string }
       fileContent = result.content
@@ -252,12 +276,12 @@
         {#if panel === '文档'}
           <div class="document-toolbar"><span>Markdown · 278 行</span><span class="live-label"><i></i> Live</span><button>Source</button><button class="preview">Preview</button></div>
           {#if selectedFile}
-            <article class="document"><div class="eyebrow">FILE PREVIEW</div><h2>{selectedFile}</h2><pre class="file-preview">{fileContent}</pre></article>
+            <article class="document"><div class="eyebrow">FILE PREVIEW</div><h2>{selectedFile}</h2><div class="document-file-actions"><span>{editingFile ? '编辑文件' : '只读预览'}</span><div>{#if !editingFile}<button on:click={() => (editingFile = true)}>编辑</button>{:else}<button on:click={() => void saveFile()}>保存</button><button on:click={() => (editingFile = false)}>取消</button>{/if}</div></div>{#if editingFile}<textarea class="file-editor" bind:value={fileContent}></textarea>{:else}<pre class="file-preview">{fileContent}</pre>{/if}</article>
           {:else}
             <article class="document"><div class="eyebrow">PI AGENT 工作方案</div><h2>轻量化桌面 Agent<br />工作台</h2><p class="lead">基于 Percho 能力重构的个人 Pi Agent 桌面端，使用更轻量的 Tauri 壳和清晰的工作区布局。</p><div class="callout"><strong>设计原则</strong><p>让 Agent 的工作过程透明，让工作结果始终可审阅。</p></div><h3>一、核心定位</h3><p>它不是传统 IDE，也不是普通聊天软件，而是一个围绕 Agent 工作流设计的桌面应用。</p><h3>二、功能分区</h3><div class="mini-list"><div><b>01</b><span><strong>会话</strong><small>多项目、多会话、持久化历史</small></span></div><div><b>02</b><span><strong>过程</strong><small>Thinking、工具调用、插话与排队</small></span></div><div><b>03</b><span><strong>结果</strong><small>文档、Diff、终端与运行任务</small></span></div></div></article>
           {/if}
         {:else if panel === '变更'}
-          <div class="panel-content"><div class="panel-title"><div><strong>工作区变更</strong><small>3 个文件已修改</small></div><button class="primary-small">提交变更</button></div><div class="change-item"><span class="file-dot modified">M</span><div><strong>src/App.svelte</strong><small>+42 −18</small></div></div><div class="change-item"><span class="file-dot modified">M</span><div><strong>src/app.css</strong><small>+118 −0</small></div></div><div class="change-item"><span class="file-dot added">A</span><div><strong>src/lib/agent.ts</strong><small>新文件</small></div></div><div class="diff-placeholder">选择文件查看 Diff</div></div>
+          <div class="panel-content"><div class="panel-title"><div><strong>工作区变更</strong><small>{gitChanges.length} 个文件已修改</small></div><button class="primary-small" on:click={() => void refreshGit()}>刷新</button></div>{#each gitChanges as change}<button class="change-item" on:click={() => void loadDiff(change.path)}><span class="file-dot" class:modified={change.code.includes('M')} class:added={change.code.includes('A') || change.code.includes('?')}>{change.code.includes('A') || change.code.includes('?') ? 'A' : 'M'}</span><div><strong>{change.path}</strong><small>{change.code}</small></div></button>{:else}<div class="diff-placeholder">当前工作区没有未提交变更</div>{/each}{#if diffContent}<pre class="diff-content">{diffContent}</pre>{/if}</div>
         {:else if panel === '终端'}
           <div class="terminal"><div><span>$</span> npm run dev</div><div class="terminal-muted">VITE v5.4.6 ready in 412 ms</div><div class="terminal-muted">➜ Local: http://localhost:5173/</div><div><span>$</span> pi --version</div><div>0.85.1</div><div class="cursor">▌</div></div>
         {:else}

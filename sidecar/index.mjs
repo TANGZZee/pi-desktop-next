@@ -3,12 +3,15 @@ import { createAgentSession, ModelRuntime, SessionManager } from '@earendil-work
 import readline from 'node:readline'
 import os from 'node:os'
 import path from 'node:path'
-import { readdir, readFile, stat } from 'node:fs/promises'
+import { readdir, readFile, stat, writeFile } from 'node:fs/promises'
+import { execFile } from 'node:child_process'
+import { promisify } from 'node:util'
 
 const sessions = new Map()
 let runtime
 let workspace = process.cwd()
 const agentDir = path.join(os.homedir(), '.pi', 'agent')
+const execFileAsync = promisify(execFile)
 
 function send(message) {
   process.stdout.write(`${JSON.stringify(message)}\n`)
@@ -88,6 +91,33 @@ async function readWorkspaceFile(cwd, file) {
   if (!info.isFile() || info.size > 512 * 1024) throw new Error('文件不存在或超过 512 KB')
   return { path: path.relative(root, absolute).replaceAll('\\', '/'), content: await readFile(absolute, 'utf8') }
 }
+async function writeWorkspaceFile(cwd, file, content) {
+  const root = path.resolve(cwd)
+  const absolute = path.resolve(root, file)
+  if (absolute !== root && !absolute.startsWith(`${root}${path.sep}`)) throw new Error('禁止写入工作区外的文件')
+  if (Buffer.byteLength(content, 'utf8') > 512 * 1024) throw new Error('文件超过 512 KB')
+  await writeFile(absolute, content, 'utf8')
+  return { path: file }
+}
+
+async function git(cwd, args) {
+  try {
+    const { stdout } = await execFileAsync('git', args, { cwd: path.resolve(cwd), maxBuffer: 2 * 1024 * 1024, windowsHide: true })
+    return stdout
+  } catch (error) {
+    if (error.code === 128) return ''
+    throw error
+  }
+}
+
+async function gitStatus(cwd = workspace) {
+  const output = await git(cwd, ['status', '--porcelain=v1'])
+  return output.split(/\\r?\\n/).filter(Boolean).map((line) => ({ code: line.slice(0, 2), path: line.slice(3) }))
+}
+
+async function gitDiff(cwd, file) {
+  return git(cwd, ['diff', '--no-ext-diff', '--', file])
+}
 async function handle(request) {
   const { id, type, payload = {} } = request
   try {
@@ -113,6 +143,18 @@ async function handle(request) {
     }
     if (type === 'read_file') {
       reply(id, await readWorkspaceFile(payload.cwd || workspace, payload.path))
+      return
+    }
+    if (type === 'write_file') {
+      reply(id, await writeWorkspaceFile(payload.cwd || workspace, payload.path, payload.content || ''))
+      return
+    }
+    if (type === 'git_status') {
+      reply(id, await gitStatus(payload.cwd || workspace))
+      return
+    }
+    if (type === 'git_diff') {
+      reply(id, await gitDiff(payload.cwd || workspace, payload.path))
       return
     }
     if (type === 'create_session') {
