@@ -100,7 +100,7 @@ async function listFiles(cwd = workspace) {
   const root = path.resolve(cwd)
   const output = []
   async function visit(dir, depth) {
-    if (depth > 2 || output.length >= 300) return
+    if (depth > 6 || output.length >= 400) return
     for (const entry of await readdir(dir, { withFileTypes: true })) {
       if (entry.name.startsWith('.') || ['node_modules', 'dist', 'target'].includes(entry.name)) continue
       const absolute = path.join(dir, entry.name)

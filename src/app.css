@@ -144,7 +144,10 @@
 
   .composer-wrap { width: min(820px, calc(100% - 48px)); margin: 0 auto; padding: 12px 0 18px; }
   .plan-hint { margin-bottom: 6px; color: #666; font-size: 11px; }
-  .composer { display: flex; flex-direction: column; min-height: 112px; border: 1px solid #bdbdbd; border-radius: 7px; background: #fff; }
+  .composer { position: relative; display: flex; flex-direction: column; min-height: 112px; border: 1px solid #bdbdbd; border-radius: 7px; background: #fff; }
+  .mention-menu { position: absolute; right: 8px; bottom: 100%; left: 8px; z-index: 40; margin-bottom: 6px; max-height: 220px; overflow: auto; border: 1px solid #c9c9c9; border-radius: 4px; background: #fff; box-shadow: 0 8px 20px rgb(0 0 0 / 12%); }
+  .mention-menu button { display: block; width: 100%; min-height: 30px; padding: 0 10px; overflow: hidden; background: transparent; color: #333; font-size: 11px; text-align: left; text-overflow: ellipsis; white-space: nowrap; }
+  .mention-menu button:hover, .mention-menu button.on { background: #ededed; }
   .composer:focus-within { border-color: #222; }
   .composer textarea { display: block; width: 100%; min-height: 66px; padding: 13px 14px 8px; border: 0; outline: 0; resize: none; background: transparent; color: #242424; font-size: 13px; line-height: 1.5; }
   .composer textarea::placeholder { color: #858585; }
@@ -171,8 +174,9 @@
   .model-button { max-width: 180px; justify-content: flex-start; overflow: hidden; text-overflow: ellipsis; }
   .model-button span, .thinking-value { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .thinking-label { color: #717171; }.thinking-value { min-width: 28px; }
-  .send { display: grid; place-items: center; width: 30px; height: 30px; padding: 0; border-radius: 3px; background: #1d1d1d; color: #fff; font-size: 0; }
-  .send span { margin: 0; font-size: 16px; line-height: 1; }.send:hover { background: #3d3d3d; }.send.stop { background: #555; }.send.imagegen-busy { background: #777; }
+  .send { display: grid; place-items: center; width: 28px; height: 28px; padding: 0; border-radius: 50%; background: #2a2a2a; color: #fff; }
+  .send:hover { background: #111; }.send.stop { background: #5a5a5a; }.send.imagegen-busy { background: #8a8a8a; }
+  .send-dot { width: 5px; height: 5px; border-radius: 50%; background: #fff; }
   .model-menu, .mode-menu, .thinking-menu, .ctx-menu { position: absolute; z-index: 50; top: calc(100% + 6px); left: 0; border: 1px solid #c9c9c9; border-radius: 4px; background: #fff; box-shadow: 0 8px 20px rgb(0 0 0 / 12%); }
   .model-menu.up, .mode-menu.up, .thinking-menu.up, .ctx-menu.up { top: auto; bottom: calc(100% + 6px); }
   .mode-menu { width: 236px; padding: 4px; }.model-menu { width: 260px; overflow: hidden; }.thinking-menu { width: 252px; padding: 12px; }.ctx-menu { width: 246px; padding: 12px; }
