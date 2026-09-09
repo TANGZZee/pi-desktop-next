@@ -6,6 +6,7 @@
   import Terminal from './Terminal.svelte'
   import Settings from './Settings.svelte'
   import { version } from '../package.json'
+  import logoUrl from './assets/pi-my-logo.png'
 
   type PanelTab = '文档' | '变更' | '终端' | '运行'
   type Session = { id: string; title: string; time: string; file?: string; state?: 'active' | 'done'; model?: string; thinking?: string; mode?: string; pinned?: boolean; archived?: boolean }
@@ -78,7 +79,7 @@
   let imageGenResult: { src: string; prompt: string } | null = null
   let imageGenConfig: ImageGenConfig = { baseUrl: '', apiKey: '', model: '', size: '1024x1024' }
   let attachError = ''
-  let rightWidth = 316
+  let rightWidth = 280
   let sessionMenu: { session: Session; x: number; y: number } | null = null
   let dragging: 'left' | 'right' | null = null
   let dragStartX = 0
@@ -398,13 +399,13 @@
   }
 
   function resetDrag(side: 'right') {
-    rightWidth = 344
+    rightWidth = 280
   }
 
   // 窗口变窄时收回侧栏宽度，避免左/右栏与聊天区合计超出窗口
   function clampToViewport() {
     if (window.innerWidth <= 1050) return
-    const grid = document.querySelector('.app-grid') as HTMLElement | null
+    const grid = document.querySelector('.window') as HTMLElement | null
     const total = grid?.clientWidth ?? window.innerWidth
     let left = showLeft ? 220 : 0
     let right = showRight ? rightWidth : 0
@@ -687,6 +688,10 @@
     }
   }
 
+  function removeAttachment(index: number) {
+    attachments = attachments.filter((_, itemIndex) => itemIndex !== index)
+  }
+
   function loadImageGenConfig() {
     try { imageGenConfig = { ...imageGenConfig, ...JSON.parse(localStorage.getItem('pdn.imagegen') ?? '{}') } } catch { /* 使用空配置 */ }
   }
@@ -816,21 +821,22 @@
 </script>
 
 <svelte:head>
-  <title>Pi Agent</title>
+  <title>Pi-My</title>
 </svelte:head>
 
-<div class="desktop">
-  <div class="window">
-    <header class="titlebar">
-      <div class="brand"><span class="brand-mark">P</span><span>PI DECK</span></div>
-      <div class="top-session-tab"><span>PiDeck agent</span><span class="top-session-plus">＋</span></div>
+  <div class="desktop">
+  <div class="window" class:left-on={showLeft} class:right-on={showRight} style={`--left-panel:${showLeft ? 220 : 0}px;--right-panel:${showRight ? rightWidth : 0}px`}>
+    <div class="title-left"><div class="brand"><img class="brand-logo" src={logoUrl} alt="Pi-My" /><span>Pi-My</span></div></div>
+    <div class="title-center">
+      <div class="top-session-tab"><span>{activeSession === '新会话' ? 'Pi-My agent' : activeSession}</span><button class="top-session-plus" aria-label="新建会话" on:click={() => { leftTab = 'Chats' }}>＋</button></div>
       <div class="title-actions">
         <span class="conn-chip" class:connected={sidecarReady}><i></i>{sidecarReady ? '已连接' : ''}</span>
         <button class="top-more" aria-label="更多选项">⋯</button>
       </div>
-    </header>
-
-    <div class="app-grid" style={`grid-template-columns:${showLeft ? 270 : 0}px minmax(430px, 1fr) ${showRight ? rightWidth : 0}px`}>
+    </div>
+    <div class="title-right"></div>
+    <button class="panel-toggle left" aria-label={showLeft ? '收起左侧栏' : '展开左侧栏'} on:click={() => (showLeft = !showLeft)}><svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" aria-hidden="true"><rect x="2" y="3" width="12" height="10" rx="1.8"/><line x1={showLeft ? '5.5' : '10.5'} y1="3" x2={showLeft ? '5.5' : '10.5'} y2="13"/></svg></button>
+    <button class="panel-toggle right" aria-label={showRight ? '收起右侧栏' : '展开右侧栏'} on:click={() => (showRight = !showRight)}><svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" aria-hidden="true"><rect x="2" y="3" width="12" height="10" rx="1.8"/><line x1={showRight ? '10.5' : '5.5'} y1="3" x2={showRight ? '10.5' : '5.5'} y2="13"/></svg></button>
       <aside class="sidebar" class:collapsed={!showLeft}>
         <div class="sidebar-actions">
           <button class="sidebar-action" on:click={async () => {
@@ -852,9 +858,10 @@
             activeSession = '新会话'
             sessions = [{ id: created.id, title: '新会话', time: '刚刚', state: 'active', thinking, file: created.file }, ...sessions]
             leftTab = 'Chats'
-          }}><svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" aria-hidden="true"><circle cx="8" cy="8" r="5.5"/><line x1="8" y1="5" x2="8" y2="11"/><line x1="5" y1="8" x2="11" y2="8"/></svg>新建任务</button>
+          }}><svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" aria-hidden="true"><circle cx="8" cy="8" r="5.5"/><line x1="8" y1="5" x2="8" y2="11"/><line x1="5" y1="8" x2="11" y2="8"/></svg>新建会话</button>
         </div>
 
+        <label class="search"><span>⌕</span><input placeholder="搜索会话" bind:value={query} /></label>
         <div class="sidebar-tabs">
           <button class:active={leftTab === 'Activity'} on:click={() => (leftTab = 'Activity')}>⌁ <span>活动</span></button>
           <button class:active={leftTab === 'Chats'} on:click={() => (leftTab = 'Chats')}>▱ <span>聊天</span></button>
@@ -873,7 +880,6 @@
             {/if}
           </div>
         {:else}
-          <label class="search"><span>⌕</span><input placeholder="搜索会话" bind:value={query} /></label>
           <div class="session-heading"><span>{leftTab === 'Activity' ? '活动' : '聊天'}</span><span class="session-count">{filteredSessions.length}</span></div>
           <div class="sessions">
             {#each filteredSessions as session}
@@ -894,7 +900,6 @@
           <span class="version">v{version}</span>
         </div>
       </aside>
-      <button class="panel-edge-toggle left" class:collapsed={!showLeft} aria-label={showLeft ? '收起左侧栏' : '展开左侧栏'} style={`left:${showLeft ? 257 : 0}px`} on:click={() => (showLeft = !showLeft)}><svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" aria-hidden="true"><rect x="2" y="3" width="12" height="10" rx="1.8"/><line x1={showLeft ? '5.5' : '10.5'} y1="3" x2={showLeft ? '5.5' : '10.5'} y2="13"/></svg></button>
 
       {#if sessionMenu}
         <div class="session-menu-backdrop" role="presentation" on:click={() => (sessionMenu = null)}>
@@ -925,8 +930,8 @@
           {#if imageGenResult}<div class="image-result"><img src={imageGenResult.src} alt={imageGenResult.prompt} /><small>{imageGenResult.prompt}</small></div>{/if}
           {#if isIdle(activeSessionId)}
             <div class="empty-state">
-              <div class="empty-mark">π</div>
-              <h2>向 Pi Agent 描述任务</h2>
+              <div class="empty-mark"><img src={logoUrl} alt="Pi-My" /></div>
+              <button class="start-project" type="button" on:click={() => void chooseWorkspace()}><span>⌂</span><span>{workspaceBase()}</span><span>⌄</span></button>
               <div class="quick-chips">
                 <button on:click={() => quickPrompt('请分析当前项目的目录结构，梳理主要模块、入口文件和各部分职责，并给出简要说明。')}>分析当前项目结构</button>
                 <button on:click={() => quickPrompt('请检查当前工作区的 Git 变更，总结改动内容、涉及的文件以及可能的风险点。')}>检查工作区变更</button>
@@ -963,29 +968,30 @@
       </main>
 
       <aside class="workspace" class:collapsed={!showRight}>
-        <div class="workspace-tabs">
-          {#each ['文档', '变更', '终端', '运行'] as tab}<button class:active={panel === tab} on:click={() => (panel = tab as PanelTab)}>{tab}{#if tab === '变更' && gitChanges.length}<span class="badge">{gitChanges.length}</span>{/if}</button>{/each}
+        <div class="workspace-rail" aria-label="工作区工具">
+          <button class:active={panel === '文档'} aria-label="文件" on:click={() => (panel = '文档')}>▱</button>
+          <button class:active={panel === '变更'} aria-label="变更" on:click={() => (panel = '变更')}>⌘</button>
+          <button class:active={panel === '终端'} aria-label="终端" on:click={() => (panel = '终端')}>⌁</button>
+          <button class:active={panel === '运行'} aria-label="运行" on:click={() => (panel = '运行')}>◌</button>
+          <span class="workspace-rail-spacer"></span>
+          <button aria-label="刷新文件" on:click={() => void loadFiles()}>↻</button>
         </div>
+        <div class="workspace-content">
         {#if panel === '文档'}
-          <div class="document-toolbar">
-            {#if selectedFile}
-              <span class="doc-name">{selectedFile}</span><span class="doc-stats">{documentStats()}</span>
+          <div class="resource-head"><span>项目文件</span><button aria-label="刷新文件" on:click={() => void loadFiles()}>↻</button></div>
+          <div class="resource-tree">
+            {#each filteredFiles as file}
+              <button class:file-directory={file.kind === 'directory'} class:file-selected={selectedFile === file.path} on:click={() => file.kind === 'file' ? void previewFile(file.path) : void loadFiles()}>
+                <span class="resource-chevron">{file.kind === 'directory' ? '›' : ''}</span><span class="resource-icon">{file.kind === 'directory' ? '□' : '·'}</span><span>{file.path}</span>
+              </button>
             {:else}
-              <span class="doc-name doc-empty-label">未选择文件</span>
-            {/if}
-            {#if selectedFile}
-              <span class="doc-actions">
-                {#if !editingFile}<button on:click={() => (editingFile = true)}>编辑</button>{:else}<button on:click={() => void saveFile()}>保存</button><button on:click={() => (editingFile = false)}>取消</button>{/if}
-              </span>
-            {/if}
+              <div class="resource-empty">选择工作区后显示文件</div>
+            {/each}
           </div>
-          <article class="document">
-            {#if selectedFile}
-              {#if editingFile}<textarea class="file-editor" bind:value={fileContent}></textarea>{:else}<pre class="file-preview">{fileContent}</pre>{/if}
-            {:else}
-              <div class="doc-empty">从左侧文件列表选择文件以预览</div>
-            {/if}
-          </article>
+          {#if selectedFile}
+            <div class="resource-preview-head"><span class="doc-name">{selectedFile}</span><span class="doc-stats">{documentStats()}</span>{#if !editingFile}<button on:click={() => (editingFile = true)}>编辑</button>{:else}<button on:click={() => void saveFile()}>保存</button><button on:click={() => (editingFile = false)}>取消</button>{/if}</div>
+            <article class="resource-preview">{#if editingFile}<textarea class="file-editor" bind:value={fileContent}></textarea>{:else}<pre class="file-preview">{fileContent}</pre>{/if}</article>
+          {/if}
         {:else if panel === '变更'}
           <div class="git-panel">
             <div class="panel-content">
@@ -1018,13 +1024,12 @@
         {:else}
           <div class="panel-content"><div class="panel-title"><div><strong>运行中的任务</strong><small>当前没有后台进程</small></div></div><div class="empty-panel"><span>◌</span><strong>暂无运行任务</strong><small>Agent 启动开发服务器后会显示在这里</small></div></div>
         {/if}
+        </div>
       </aside>
-      <button class="panel-edge-toggle right" class:collapsed={!showRight} aria-label={showRight ? '收起右侧栏' : '展开右侧栏'} style={`right:${showRight ? rightWidth - 30 : 0}px`} on:click={() => (showRight = !showRight)}><svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" aria-hidden="true"><rect x="2" y="3" width="12" height="10" rx="1.8"/><line x1={showRight ? '10.5' : '5.5'} y1="3" x2={showRight ? '10.5' : '5.5'} y2="13"/></svg></button>
       {#if showRight}
         <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
-        <div class="drag-handle" class:dragging={dragging === 'right'} style={`right:${rightWidth - 2.5}px`} role="separator" aria-label="调整右侧栏宽度" on:mousedown={(event) => startDrag(event, 'right')} on:dblclick={() => resetDrag('right')}></div>
+        <div class="drag-handle" class:dragging={dragging === 'right'} role="separator" aria-label="调整右侧栏宽度" on:mousedown={(event) => startDrag(event, 'right')} on:dblclick={() => resetDrag('right')}></div>
       {/if}
-    </div>
     <footer class="statusbar"><span title={workspacePath}>{workspaceBase()}</span><span>{statusText()}</span><span>{sessions.length} 个会话 · 保存至 ~/.pi/agent/sessions</span></footer>
   </div>
   <Settings open={showSettings} connected={sidecarReady} info={settingsInfo} usageStats={usageStats} imageGenConfig={imageGenConfig} onSaveImageGenConfig={saveImageGenConfig} onclose={() => { showSettings = false; loadHiddenProviders() }} openDir={openDir} workspacePath={workspacePath} onChooseWorkspace={chooseWorkspace} onOpenRepo={() => void request('open_url', { url: 'https://github.com/TANGZZee/pi-desktop-next' })} providers={providers} onRefreshProviders={refreshProviders} onRefreshUsage={refreshUsage} />
