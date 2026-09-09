@@ -1,6 +1,9 @@
+use portable_pty::{native_pty_system, CommandBuilder, PtySize};
 use serde_json::Value;
-use std::io::{BufRead, BufReader, Write};
+use std::collections::HashMap;
+use std::io::{BufRead, BufReader, Read, Write};
 use std::process::{Child, ChildStdin, Stdio};
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Mutex;
 use std::thread;
 use tauri::{Emitter, Manager};
@@ -45,6 +48,27 @@ fn spawn_sidecar(app: &tauri::AppHandle) -> Result<Sidecar, String> {
     Ok(Sidecar { child, stdin, next_id: 1 })
 }
 
+struct PtyEntry {
+    writer: Box<dyn Write + Send>,
+    child: Box<dyn portable_pty::Child + Send + Sync>,
+    #[allow(dead_code)]
+    master: Option<Box<dyn portable_pty::MasterPty + Send>>,
+}
+
+struct PtyPool {
+    entries: Mutex<HashMap<u32, PtyEntry>>,
+    next_id: AtomicU32,
+}
+
+impl Default for PtyPool {
+    fn default() -> Self {
+        Self {
+            entries: Mutex::new(HashMap::new()),
+            next_id: AtomicU32::new(1),
+        }
+    }
+}
+
 #[tauri::command]
 fn agent_request(state: tauri::State<'_, Mutex<Option<Sidecar>>>, request: Value) -> Result<u64, String> {
     let mut sidecar = state.lock().map_err(|_| "sidecar 状态锁失败")?;
@@ -64,6 +88,68 @@ fn agent_status(state: tauri::State<'_, Mutex<Option<Sidecar>>>) -> bool {
     state.lock().ok().and_then(|mut guard| guard.as_mut().map(|s| s.child.try_wait().ok().flatten().is_none())).unwrap_or(false)
 }
 
+#[tauri::command]
+fn pty_spawn(app: tauri::AppHandle, state: tauri::State<'_, PtyPool>) -> Result<u32, String> {
+    let pair = native_pty_system()
+        .openpty(PtySize { rows: 24, cols: 80, pixel_width: 0, pixel_height: 0 })
+        .map_err(|error| format!("无法打开 PTY: {error}"))?;
+
+    #[cfg(windows)]
+    let cmd = CommandBuilder::new("cmd.exe");
+    #[cfg(not(windows))]
+    let cmd = CommandBuilder::new("bash");
+
+    let child = pair.slave.spawn_command(cmd).map_err(|error| format!("无法启动 shell: {error}"))?;
+    // 释放 slave 句柄：子进程已继承其文件描述符，父进程无需保留。
+    drop(pair.slave);
+    let reader = pair.master.try_clone_reader().map_err(|error| format!("无法读取 PTY 输出: {error}"))?;
+    let writer = pair.master.take_writer().map_err(|error| format!("无法写入 PTY: {error}"))?;
+
+    let id = state.next_id.fetch_add(1, Ordering::SeqCst);
+    let handle = app.clone();
+    thread::spawn(move || {
+        let mut reader = reader;
+        let mut buffer = [0u8; 8192];
+        loop {
+            match reader.read(&mut buffer) {
+                Ok(0) => break,
+                Ok(length) => {
+                    let data = String::from_utf8_lossy(&buffer[..length]).to_string();
+                    let _ = handle.emit("pty-output", serde_json::json!({ "id": id, "data": data }));
+                }
+                Err(_) => break,
+            }
+        }
+        let _ = handle.emit("pty-output", serde_json::json!({ "id": id, "data": "\r\n[process exited]\r\n" }));
+    });
+
+    state.entries.lock().map_err(|_| "PTY 状态锁失败")?.insert(id, PtyEntry {
+        writer,
+        child,
+        master: Some(pair.master),
+    });
+
+    Ok(id)
+}
+
+#[tauri::command]
+fn pty_write(id: u32, data: String, state: tauri::State<'_, PtyPool>) -> Result<(), String> {
+    let mut entries = state.entries.lock().map_err(|_| "PTY 状态锁失败")?;
+    let entry = entries.get_mut(&id).ok_or("该终端不存在或已退出")?;
+    entry.writer.write_all(data.as_bytes()).map_err(|error| error.to_string())?;
+    entry.writer.flush().map_err(|error| error.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+fn pty_kill(id: u32, state: tauri::State<'_, PtyPool>) -> Result<(), String> {
+    let mut entries = state.entries.lock().map_err(|_| "PTY 状态锁失败")?;
+    if let Some(mut entry) = entries.remove(&id) {
+        let _ = entry.child.kill();
+    }
+    Ok(())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -72,9 +158,10 @@ pub fn run() {
         .setup(|app| {
             let sidecar = spawn_sidecar(app.handle())?;
             app.manage(Mutex::new(Some(sidecar)));
+            app.manage(PtyPool::default());
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![agent_request, agent_status])
+        .invoke_handler(tauri::generate_handler![agent_request, agent_status, pty_spawn, pty_write, pty_kill])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
         .run(|app, event| {
@@ -82,6 +169,14 @@ pub fn run() {
                 if let Some(state) = app.try_state::<Mutex<Option<Sidecar>>>() {
                     if let Ok(mut guard) = state.lock() {
                         if let Some(sidecar) = guard.as_mut() { let _ = sidecar.child.kill(); }
+                    }
+                }
+                if let Some(pool) = app.try_state::<PtyPool>() {
+                    if let Ok(mut entries) = pool.entries.lock() {
+                        for entry in entries.values_mut() {
+                            let _ = entry.child.kill();
+                        }
+                        entries.clear();
                     }
                 }
             }

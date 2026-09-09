@@ -3,6 +3,7 @@
   import { invoke } from '@tauri-apps/api/core'
   import { listen } from '@tauri-apps/api/event'
   import { open } from '@tauri-apps/plugin-dialog'
+  import Terminal from './Terminal.svelte'
 
   type PanelTab = '文档' | '变更' | '终端' | '运行'
   type Session = { id: string; title: string; time: string; file?: string; state?: 'active' | 'done'; model?: string; thinking?: string }
@@ -365,7 +366,7 @@
         {:else if panel === '变更'}
           <div class="panel-content"><div class="panel-title"><div><strong>工作区变更</strong><small>{gitChanges.length} 个文件已修改</small></div><button class="primary-small" on:click={() => void refreshGit()}>刷新</button></div>{#each gitChanges as change}<button class="change-item" on:click={() => void loadDiff(change.path)}><span class="file-dot" class:modified={change.code.includes('M')} class:added={change.code.includes('A') || change.code.includes('?')}>{change.code.includes('A') || change.code.includes('?') ? 'A' : 'M'}</span><div><strong>{change.path}</strong><small>{change.code}</small></div></button>{:else}<div class="diff-placeholder">当前工作区没有未提交变更</div>{/each}{#if diffContent}<pre class="diff-content">{diffContent}</pre>{/if}</div>
         {:else if panel === '终端'}
-          <div class="terminal"><div><span>$</span> npm run dev</div><div class="terminal-muted">VITE v5.4.6 ready in 412 ms</div><div class="terminal-muted">➜ Local: http://localhost:5173/</div><div><span>$</span> pi --version</div><div>0.85.1</div><div class="cursor">▌</div></div>
+          <Terminal visible={panel === '终端'} />
         {:else}
           <div class="panel-content"><div class="panel-title"><div><strong>运行中的任务</strong><small>当前没有后台进程</small></div></div><div class="empty-panel"><span>◌</span><strong>暂无运行任务</strong><small>Agent 启动开发服务器后会显示在这里</small></div></div>
         {/if}
