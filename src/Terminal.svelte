@@ -26,7 +26,8 @@
     fit.fit()
     term.focus()
 
-    ptyId = await invoke<number>('pty_spawn')
+    const shell = localStorage.getItem('pdn.shell') || 'cmd'
+    ptyId = await invoke<number>('pty_spawn', { shell })
 
     unlisten = await listen<{ id: number; data: string }>('pty-output', ({ payload }) => {
       if (payload.id === ptyId) term.write(payload.data)

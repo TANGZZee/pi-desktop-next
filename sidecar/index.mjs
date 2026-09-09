@@ -43,7 +43,7 @@ async function ensureRuntime() {
   return runtime
 }
 
-async function createSession(id, cwd = workspace) {
+async function createSession(id, cwd = workspace, thinking) {
   const modelRuntime = await ensureRuntime()
   const { session } = await createAgentSession({
     cwd,
@@ -51,6 +51,7 @@ async function createSession(id, cwd = workspace) {
     modelRuntime,
     sessionManager: SessionManager.create(cwd, path.join(agentDir, 'sessions')),
   })
+  if (thinking) session.setThinkingLevel(thinking)
   const unsubscribe = session.subscribe((event) => send({ type: 'event', sessionId: id, event: summarizeEvent(event) }))
   sessions.set(id, { session, unsubscribe, cwd })
   return { id, sessionId: session.sessionId, cwd, file: session.sessionManager.getSessionFile() }
@@ -109,6 +110,60 @@ function openDirectory(target) {
   }
 }
 
+// 仓库地址硬编码，忽略客户端传入的 url，防止注入任意命令。
+const REPO_URL = 'https://github.com/TANGZZee/pi-desktop-next'
+
+function openUrl(url) {
+  try {
+    if (process.platform === 'win32') {
+      execFile('cmd', ['/c', 'start', '', url]).on('error', () => {})
+    } else {
+      execFile(process.platform === 'darwin' ? 'open' : 'xdg-open', [url]).on('error', () => {})
+    }
+  } catch {
+    // 打开失败时静默
+  }
+}
+
+function num(value) {
+  return typeof value === 'number' && Number.isFinite(value) ? value : 0
+}
+
+// 会话上下文与用量统计；任何字段缺失都兜底为 0，不抛错。
+function sessionStats(entry) {
+  const messages = Array.isArray(entry.session.messages) ? entry.session.messages : []
+  const totals = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 }
+  let currentContext = 0
+  for (const message of messages) {
+    if (!message || message.role !== 'assistant' || !message.usage) continue
+    const usage = message.usage
+    totals.input += num(usage.input)
+    totals.output += num(usage.output)
+    totals.cacheRead += num(usage.cacheRead)
+    totals.cacheWrite += num(usage.cacheWrite)
+    totals.total += num(usage.totalTokens)
+    // 口径：最近一条 assistant 消息的 usage，input + output + cacheRead 之和。
+    currentContext = num(usage.input) + num(usage.output) + num(usage.cacheRead)
+  }
+  const model = entry.session.model
+  const cost = model?.cost ?? {}
+  const costUsd =
+    (totals.input * num(cost.input) +
+      totals.output * num(cost.output) +
+      totals.cacheRead * num(cost.cacheRead) +
+      totals.cacheWrite * num(cost.cacheWrite)) /
+    1e6
+  const denominator = totals.input + totals.cacheRead
+  const cacheHitRate = denominator > 0 ? totals.cacheRead / denominator : 0
+  return {
+    currentContext,
+    window: num(model?.contextWindow),
+    totals,
+    costUsd,
+    cacheHitRate,
+  }
+}
+
 async function readWorkspaceFile(cwd, file) {
   const root = path.resolve(cwd)
   const absolute = path.resolve(root, file)
@@ -162,6 +217,11 @@ async function handle(request) {
       const target = String(payload.path ?? '')
       if (!target) throw new Error('路径为空')
       openDirectory(target)
+      reply(id, { ok: true })
+      return
+    }
+    if (type === 'open_url') {
+      openUrl(REPO_URL)
       reply(id, { ok: true })
       return
     }
@@ -225,7 +285,13 @@ async function handle(request) {
       return
     }
     if (type === 'create_session') {
-      reply(id, await createSession(payload.sessionId || `session-${Date.now()}`, payload.cwd || workspace))
+      reply(id, await createSession(payload.sessionId || `session-${Date.now()}`, payload.cwd || workspace, payload.thinking))
+      return
+    }
+    if (type === 'session_stats') {
+      const entry = sessions.get(payload.sessionId)
+      if (!entry) throw new Error(`会话不存在: ${payload.sessionId}`)
+      reply(id, sessionStats(entry))
       return
     }
     if (type === 'list_sessions') {

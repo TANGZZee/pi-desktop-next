@@ -89,13 +89,22 @@ fn agent_status(state: tauri::State<'_, Mutex<Option<Sidecar>>>) -> bool {
 }
 
 #[tauri::command]
-fn pty_spawn(app: tauri::AppHandle, state: tauri::State<'_, PtyPool>) -> Result<u32, String> {
+fn pty_spawn(app: tauri::AppHandle, state: tauri::State<'_, PtyPool>, shell: Option<String>) -> Result<u32, String> {
     let pair = native_pty_system()
         .openpty(PtySize { rows: 24, cols: 80, pixel_width: 0, pixel_height: 0 })
         .map_err(|error| format!("无法打开 PTY: {error}"))?;
 
     #[cfg(windows)]
-    let cmd = CommandBuilder::new("cmd.exe");
+    let cmd = {
+        // 白名单：cmd / powershell / pwsh，其它值回落 cmd.exe。
+        let program = match shell.as_deref() {
+            Some("powershell") => "powershell.exe",
+            Some("pwsh") => "pwsh.exe",
+            Some("cmd") => "cmd.exe",
+            _ => "cmd.exe",
+        };
+        CommandBuilder::new(program)
+    };
     #[cfg(not(windows))]
     let cmd = CommandBuilder::new("bash");
 
