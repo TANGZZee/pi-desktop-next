@@ -7,6 +7,7 @@
   type PanelTab = '文档' | '变更' | '终端' | '运行'
   type Session = { id: string; title: string; time: string; file?: string; state?: 'active' | 'done' }
   type GitChange = { code: string; path: string }
+  type RunSlot = { reply: string; thinking: string; tool: string; running: boolean; queue: string[]; sent: string[] }
 
   let sessions: Session[] = [
     { id: 'main', title: '设计 pi-agent 桌面端', time: '刚刚', state: 'active' },
@@ -28,16 +29,28 @@
   let diffContent = ''
   let inputText = ''
   let showThinking = false
-  let isRunning = false
-  let sentMessages: string[] = []
-  let agentReply = ''
-  let thinkingText = ''
-  let toolActivity = ''
+  let runState: Record<string, RunSlot> = {}
   let sidecarReady = false
   let modelCount = 0
-  let queuedMessages: string[] = []
   const pending = new Map<number, (value: unknown) => void>()
   let requestSequence = 0
+
+  function emptySlot(): RunSlot {
+    return { reply: '', thinking: '', tool: '', running: false, queue: [], sent: [] }
+  }
+
+  function slotFor(id: string): RunSlot {
+    return runState[id] ?? emptySlot()
+  }
+
+  // 整体替换 runState，保证 Svelte 检测到变化
+  function patchSlot(id: string, patch: Partial<RunSlot>) {
+    runState = { ...runState, [id]: { ...emptySlot(), ...runState[id], ...patch } }
+  }
+
+  function markSession(id: string, state: 'active' | 'done') {
+    sessions = sessions.map((item) => (item.id === id ? { ...item, state } : item))
+  }
 
   function request(type: string, payload = {}) {
     const id = ++requestSequence
@@ -54,11 +67,19 @@
       }
       if (payload.type === 'event') {
         const event = payload.event
-        if (event?.type === 'message_update' && event.delta) agentReply += event.delta
-        if (event?.type === 'message_update' && event.thinking) thinkingText += event.thinking
-        if (event?.type === 'tool_execution_start') toolActivity = `正在执行 ${event.toolName || '工具'}…`
-        if (event?.type === 'tool_execution_end') toolActivity = `${event.toolName || '工具'} 已完成`
-        if (event?.type === 'agent_end' || event?.type === 'error') { isRunning = false; toolActivity = '' }
+        if (!event) return
+        const id = payload.sessionId || activeSessionId
+        const slot = slotFor(id)
+        if (event.type === 'message_update' && (event.delta || event.thinking)) {
+          const patch: Partial<RunSlot> = {}
+          if (event.delta) patch.reply = slot.reply + event.delta
+          if (event.thinking) patch.thinking = slot.thinking + event.thinking
+          patchSlot(id, patch)
+        }
+        if (event.type === 'tool_execution_start') patchSlot(id, { tool: `正在执行 ${event.toolName || '工具'}…` })
+        if (event.type === 'tool_execution_end') patchSlot(id, { tool: `${event.toolName || '工具'} 已完成` })
+        if (event.type === 'agent_start') { patchSlot(id, { running: true }); markSession(id, 'active') }
+        if (event.type === 'agent_end' || event.type === 'error') { patchSlot(id, { running: false, tool: '' }); markSession(id, 'done') }
       }
     })
     try {
@@ -125,31 +146,34 @@
   async function selectSession(session: Session) {
     activeSessionId = session.id
     activeSession = session.title
-    sentMessages = []
-    agentReply = ''
     if (sidecarReady && session.file) await request('open_session', { sessionId: session.id, file: session.file })
   }
 
   function submit(behavior: 'steer' | 'followUp' = 'steer') {
     const text = inputText.trim()
     if (!text) return
-    sentMessages = [...sentMessages, text]
+    const id = activeSessionId
+    const slot = slotFor(id)
     inputText = ''
-    agentReply = ''
-    thinkingText = ''
-    isRunning = true
-    if (behavior === 'followUp') queuedMessages = [...queuedMessages, text]
+    patchSlot(id, {
+      sent: [...slot.sent, text],
+      reply: '',
+      thinking: '',
+      running: true,
+      queue: behavior === 'followUp' ? [...slot.queue, text] : slot.queue
+    })
     if (sidecarReady) {
-      void request('prompt', { sessionId: activeSessionId, text, cwd: '.', behavior })
-        .catch(() => (isRunning = false))
+      void request('prompt', { sessionId: id, text, cwd: '.', behavior })
+        .catch(() => patchSlot(id, { running: false }))
     } else {
-      window.setTimeout(() => (isRunning = false), 1400)
+      window.setTimeout(() => patchSlot(id, { running: false }), 1400)
     }
   }
 
   function stop() {
-    if (!sidecarReady) { isRunning = false; return }
-    void request('abort', { sessionId: activeSessionId }).finally(() => (isRunning = false))
+    const id = activeSessionId
+    if (!sidecarReady) { patchSlot(id, { running: false }); return }
+    void request('abort', { sessionId: id }).finally(() => patchSlot(id, { running: false }))
   }
 
   function handleKeydown(event: KeyboardEvent) {
@@ -247,25 +271,25 @@
             {#if showThinking}
               <div class="thinking-detail"><div><i></i>分析 Percho 现有功能边界</div><div><i></i>规划 Tauri + Node sidecar 通信</div><div><i></i>整理三栏工作台信息层级</div></div>
             {/if}
-            {#if thinkingText}<div class="thinking-live"><span class="spinner"></span> {thinkingText}</div>{/if}
-            {#if toolActivity}<div class="tool-live"><span>◌</span> {toolActivity}</div>{/if}
-            {#if queuedMessages.length}<div class="queue-live">⌁ 已排队 {queuedMessages.length} 条消息（Alt+Enter）</div>{/if}
+            {#if runState[activeSessionId]?.thinking}<div class="thinking-live"><span class="spinner"></span> {runState[activeSessionId]?.thinking}</div>{/if}
+            {#if runState[activeSessionId]?.tool}<div class="tool-live"><span>◌</span> {runState[activeSessionId]?.tool}</div>{/if}
+            {#if (runState[activeSessionId]?.queue ?? []).length}<div class="queue-live">⌁ 已排队 {(runState[activeSessionId]?.queue ?? []).length} 条消息（Alt+Enter）</div>{/if}
             <h2>第一版工作台结构</h2>
             <p>左侧管理项目和会话，中间负责与 Agent 工作，右侧用于查看文档、变更和运行结果。</p>
             <div class="feature-table"><div class="table-row table-head"><span>区域</span><span>职责</span><span>状态</span></div><div class="table-row"><span>会话栏</span><span>项目、Chats、Files</span><span class="muted">基础完成</span></div><div class="table-row"><span>Agent 区</span><span>思考、工具调用、插话</span><span class="blue">设计中</span></div><div class="table-row"><span>工作区</span><span>文档、Git、终端</span><span class="muted">待接入</span></div></div>
             <div class="tool-summary"><span class="tool-icon">✓</span><div><strong>已读取项目需求</strong><small>Percho · pi-desktop · Zosma Cowork</small></div><span class="tool-time">1.8s</span></div>
           </div>
-          {#each sentMessages as message}
+          {#each runState[activeSessionId]?.sent ?? [] as message}
             <div class="message user-message"><div class="user-bubble">{message}</div><time>刚刚</time></div>
           {/each}
-          {#if agentReply}<div class="message assistant-message"><div class="message-meta"><span class="assistant-avatar">π</span><strong>Pi Agent</strong><span>实时回复</span></div><p>{agentReply}</p></div>{/if}
-          {#if isRunning}<div class="running-line"><span class="spinner"></span> Agent 正在处理…</div>{/if}
+          {#if runState[activeSessionId]?.reply}<div class="message assistant-message"><div class="message-meta"><span class="assistant-avatar">π</span><strong>Pi Agent</strong><span>实时回复</span></div><p>{runState[activeSessionId]?.reply}</p></div>{/if}
+          {#if runState[activeSessionId]?.running}<div class="running-line"><span class="spinner"></span> Agent 正在处理…</div>{/if}
         </div>
 
         <div class="composer-wrap">
           <div class="composer">
             <textarea bind:value={inputText} on:keydown={handleKeydown} placeholder="输入消息…  使用 @ 引用文件，/ 执行命令" rows="2"></textarea>
-            <div class="composer-toolbar"><div class="composer-left"><button>＋</button><button>⌘ GLM 5.2 <span>⌄</span></button><button>思考：高 <span>⌄</span></button></div><div class="composer-right"><span class="hint">Enter 插话 · Alt+Enter 排队</span><button class:stop={isRunning} class="send" on:click={isRunning ? stop : () => submit('steer')}>{isRunning ? '停止' : '发送'} <span>{isRunning ? '■' : '↑'}</span></button></div></div>
+            <div class="composer-toolbar"><div class="composer-left"><button>＋</button><button>⌘ GLM 5.2 <span>⌄</span></button><button>思考：高 <span>⌄</span></button></div><div class="composer-right"><span class="hint">Enter 插话 · Alt+Enter 排队</span><button class:stop={runState[activeSessionId]?.running} class="send" on:click={runState[activeSessionId]?.running ? stop : () => submit('steer')}>{runState[activeSessionId]?.running ? '停止' : '发送'} <span>{runState[activeSessionId]?.running ? '■' : '↑'}</span></button></div></div>
           </div>
           <div class="composer-note">Pi Agent 可以读取和修改当前工作区中的文件</div>
         </div>
