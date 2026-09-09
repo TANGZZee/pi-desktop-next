@@ -4,6 +4,8 @@
   import { listen } from '@tauri-apps/api/event'
   import { open, confirm } from '@tauri-apps/plugin-dialog'
   import Terminal from './Terminal.svelte'
+  import Settings from './Settings.svelte'
+  import { version } from '../package.json'
 
   type PanelTab = '文档' | '变更' | '终端' | '运行'
   type Session = { id: string; title: string; time: string; file?: string; state?: 'active' | 'done'; model?: string; thinking?: string }
@@ -12,6 +14,7 @@
   type SidecarResponse = { type: 'response'; id: number; ok: boolean; result: unknown; error?: string }
   type SentMessage = { text: string; at: string }
   type RunSlot = { reply: string; thinking: string; tool: string; running: boolean; queue: string[]; sent: SentMessage[] }
+  type SettingsInfo = { node: string; sdk: string; agentDir: string; sessionDir: string; authProviders: string[] }
   type CtxStats = { currentContext: number; window: number; totals: { input: number; output: number; cacheRead: number; cacheWrite: number; total: number }; costUsd: number; cacheHitRate: number }
   const CTX_CIRC = 2 * Math.PI * 7
   const EMPTY_CTX: CtxStats = { currentContext: 0, window: 0, totals: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 }, costUsd: 0, cacheHitRate: 0 }
@@ -22,6 +25,9 @@
   let activeSessionId = ''
   let panel: PanelTab = '文档'
   let leftTab: 'Chats' | 'Files' = 'Chats'
+  let showLeft = true
+  let showRight = true
+  let showSettings = false
   let workspacePath = '.'
   let files: Array<{ path: string; kind: 'file' | 'directory' }> = []
   let selectedFile = ''
@@ -43,6 +49,7 @@
   let modelQuery = ''
   let modelSearchInput: HTMLInputElement
   let modelButtonRef: HTMLButtonElement
+  let settingsInfo: SettingsInfo | null = null
   let ctxStats: CtxStats = EMPTY_CTX
   let ctxOpen = false
   let ctxMenuUp = false
@@ -415,8 +422,28 @@
     void refreshCtxStats()
   }
 
+  function openDir(path: string) {
+    if (sidecarReady && path) void request('open_dir', { path })
+  }
+
+  function openUrl() {
+    if (sidecarReady) void request('open_url')
+  }
+
+  async function openSettings() {
+    showSettings = true
+    if (sidecarReady) {
+      try {
+        settingsInfo = await request('info') as SettingsInfo
+      } catch {
+        settingsInfo = null
+      }
+    }
+  }
+
   // 首次发送时用文本前 20 字自动命名「新会话」；返回新标题用于持久化。
   function maybeAutoTitle(id: string, text: string) {
+    if (localStorage.getItem('pdn.autoname') === '0') return null
     const session = sessions.find((item) => item.id === id)
     if (!session || (session.title && session.title !== '新会话')) return null
     const title = text.length > 20 ? `${text.slice(0, 20)}…` : text
@@ -489,18 +516,20 @@
 <div class="desktop">
   <div class="window">
     <header class="titlebar">
+      <button class="panel-toggle" class:toggled={!showLeft} aria-label="切换左侧栏" on:click={() => (showLeft = !showLeft)}>
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" aria-hidden="true"><rect x="1.5" y="2.5" width="13" height="11" rx="2.5"/><line x1="5.5" y1="2.5" x2="5.5" y2="13.5"/></svg>
+      </button>
       <div class="brand"><span class="brand-mark">π</span><span>Pi Agent</span></div>
       <div class="title-actions">
-        <button class="workspace-button" title={workspacePath} on:click={chooseWorkspace}>
-          <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round" aria-hidden="true"><path d="M1.5 4A1.5 1.5 0 0 1 3 2.5h3l2 2h5A1.5 1.5 0 0 1 14.5 6v6.5A1.5 1.5 0 0 1 13 14H3A1.5 1.5 0 0 1 1.5 12.5V4Z"/></svg>
-          <span class="workspace-label">{workspaceLabel()}</span>
+        <button class="panel-toggle" class:toggled={!showRight} aria-label="切换右侧栏" on:click={() => (showRight = !showRight)}>
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" aria-hidden="true"><rect x="1.5" y="2.5" width="13" height="11" rx="2.5"/><line x1="10.5" y1="2.5" x2="10.5" y2="13.5"/></svg>
         </button>
         <span class="conn-chip" class:connected={sidecarReady}><i></i>{sidecarReady ? '已连接' : '未连接'}</span>
       </div>
     </header>
 
     <div class="app-grid">
-      <aside class="sidebar">
+      <aside class="sidebar" class:collapsed={!showLeft}>
         <div class="sidebar-head">
           <button class="new-button" on:click={async () => {
             if (!sidecarReady) {
@@ -520,6 +549,10 @@
             activeSession = '新会话'
             sessions = [{ id: created.id, title: '新会话', time: '刚刚', state: 'active', thinking, file: created.file }, ...sessions]
           }}><span>＋</span> 新建会话</button>
+          <button class="workspace-button" title={workspacePath} on:click={chooseWorkspace}>
+            <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round" aria-hidden="true"><path d="M1.5 4A1.5 1.5 0 0 1 3 2.5h3l2 2h5A1.5 1.5 0 0 1 14.5 6v6.5A1.5 1.5 0 0 1 13 14H3A1.5 1.5 0 0 1 1.5 12.5V4Z"/></svg>
+            <span class="workspace-label">{workspaceLabel()}</span>
+          </button>
         </div>
 
         <div class="segmented">
@@ -554,6 +587,12 @@
           </div>
         {/if}
 
+        <div class="sidebar-footer">
+          <button class="icon-button" aria-label="打开设置" on:click={() => void openSettings()}>
+            <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" aria-hidden="true"><circle cx="8" cy="8" r="2.4"/><path d="M8 1.7v2M8 12.3v2M14.3 8h-2M3.7 8h-2M12.5 3.5l-1.4 1.4M4.9 11.1l-1.4 1.4M12.5 12.5l-1.4-1.4M4.9 4.9 3.5 3.5"/></svg>
+          </button>
+          <span class="version">v{version}</span>
+        </div>
       </aside>
 
       <main class="chat">
@@ -577,7 +616,7 @@
             {#each runState[activeSessionId]?.sent ?? [] as message}
               <div class="message user-message"><div class="user-bubble">{message.text}</div><time>{message.at}</time></div>
             {/each}
-            {#if runState[activeSessionId]?.thinking && runState[activeSessionId]?.running}<div class="thinking-live"><span class="spinner"></span> {runState[activeSessionId].thinking}</div>{/if}
+            {#if runState[activeSessionId]?.thinking && runState[activeSessionId]?.running}<div class="thinking-live"><span class="atom"><span class="nucleus"></span><span class="orbit orbit-1"><i></i></span><span class="orbit orbit-2"><i></i></span><span class="orbit orbit-3"><i></i></span></span> Thinking</div>{/if}
             {#if runState[activeSessionId]?.tool}<div class="tool-live"><span>◌</span> {runState[activeSessionId]?.tool}</div>{/if}
             {#if (runState[activeSessionId]?.queue ?? []).length}<div class="queue-live">⌁ 已排队 {(runState[activeSessionId]?.queue ?? []).length} 条消息（Alt+Enter）</div>{/if}
             {#if runState[activeSessionId]?.reply}<div class="message assistant-message"><div class="message-meta"><span class="assistant-avatar">π</span><strong>Pi Agent</strong><span>实时回复</span></div><p>{runState[activeSessionId]?.reply}</p></div>{/if}
@@ -594,7 +633,7 @@
         </div>
       </main>
 
-      <aside class="workspace">
+      <aside class="workspace" class:collapsed={!showRight}>
         <div class="workspace-tabs">{#each ['文档', '变更', '终端', '运行'] as tab}<button class:active={panel === tab} on:click={() => (panel = tab as PanelTab)}>{tab}{#if tab === '变更' && gitChanges.length}<span class="badge">{gitChanges.length}</span>{/if}</button>{/each}</div>
         {#if panel === '文档'}
           <div class="document-toolbar">
@@ -652,4 +691,5 @@
     </div>
     <footer class="statusbar"><span title={workspacePath}>{workspaceBase()}</span><span>{statusText()}</span><span>{sessions.length} 个会话 · 保存至 ~/.pi/agent/sessions</span></footer>
   </div>
+  <Settings open={showSettings} connected={sidecarReady} info={settingsInfo} onclose={() => (showSettings = false)} openDir={openDir} openUrl={openUrl} workspacePath={workspacePath} chooseWorkspace={chooseWorkspace} />
 </div>
