@@ -100,12 +100,13 @@ async function writeWorkspaceFile(cwd, file, content) {
   return { path: file }
 }
 
-async function git(cwd, args) {
+// 仅暴露非破坏性 Git 写操作；reset / checkout / clean / stash 等一律不提供。
+async function git(cwd, args, { throwOnFailure = false } = {}) {
   try {
     const { stdout } = await execFileAsync('git', args, { cwd: path.resolve(cwd), maxBuffer: 2 * 1024 * 1024, windowsHide: true })
     return stdout
   } catch (error) {
-    if (error.code === 128) return ''
+    if (error.code === 128 && !throwOnFailure) return ''
     throw error
   }
 }
@@ -155,6 +156,35 @@ async function handle(request) {
     }
     if (type === 'git_diff') {
       reply(id, await gitDiff(payload.cwd || workspace, payload.path))
+      return
+    }
+    if (type === 'git_add') {
+      const paths = Array.isArray(payload.paths) ? payload.paths.filter((item) => typeof item === 'string') : []
+      if (!paths.length) throw new Error('未指定要暂存的文件')
+      await git(payload.cwd || workspace, ['add', '--', ...paths], { throwOnFailure: true })
+      reply(id, { added: paths })
+      return
+    }
+    if (type === 'git_commit') {
+      const message = String(payload.message ?? '').trim()
+      if (!message) throw new Error('提交信息不能为空')
+      try {
+        await git(payload.cwd || workspace, ['commit', '-m', message], { throwOnFailure: true })
+        reply(id, { committed: true })
+      } catch (error) {
+        const extra = [error?.stdout, error?.stderr].filter((item) => typeof item === 'string' && item.trim()).map((item) => item.trim()).join('\n')
+        throw new Error(extra || (error?.message ?? 'git commit 失败'))
+      }
+      return
+    }
+    if (type === 'git_push') {
+      try {
+        await git(payload.cwd || workspace, ['push'], { throwOnFailure: true })
+        reply(id, { pushed: true })
+      } catch (error) {
+        const extra = [error?.stderr, error?.stdout].filter((item) => typeof item === 'string' && item.trim()).map((item) => item.trim()).join('\n')
+        throw new Error(extra || (error?.message ?? 'git push 失败'))
+      }
       return
     }
     if (type === 'create_session') {

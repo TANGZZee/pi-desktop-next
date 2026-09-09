@@ -2,13 +2,14 @@
   import { onMount } from 'svelte'
   import { invoke } from '@tauri-apps/api/core'
   import { listen } from '@tauri-apps/api/event'
-  import { open } from '@tauri-apps/plugin-dialog'
+  import { open, confirm } from '@tauri-apps/plugin-dialog'
   import Terminal from './Terminal.svelte'
 
   type PanelTab = '文档' | '变更' | '终端' | '运行'
   type Session = { id: string; title: string; time: string; file?: string; state?: 'active' | 'done'; model?: string; thinking?: string }
   type ModelInfo = { provider: string; id: string; name: string; reasoning: boolean }
   type GitChange = { code: string; path: string }
+  type SidecarResponse = { type: 'response'; id: number; ok: boolean; result: unknown; error?: string }
   type RunSlot = { reply: string; thinking: string; tool: string; running: boolean; queue: string[]; sent: string[] }
 
   let sessions: Session[] = [
@@ -29,6 +30,9 @@
   let editingFile = false
   let gitChanges: GitChange[] = []
   let diffContent = ''
+  let staged: Record<string, boolean> = {}
+  let commitMessage = ''
+  let gitError = ''
   let inputText = ''
   let showThinking = false
   let runState: Record<string, RunSlot> = {}
@@ -40,7 +44,7 @@
   const THINKING_LEVELS = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']
   const THINKING_LABELS: Record<string, string> = { off: '关', minimal: '极低', low: '低', medium: '中', high: '高', xhigh: '超高', max: '最大' }
   const DEFAULT_THINKING = 'medium'
-  const pending = new Map<number, (value: unknown) => void>()
+  const pending = new Map<number, (value: SidecarResponse) => void>()
   let requestSequence = 0
 
   function emptySlot(): RunSlot {
@@ -111,7 +115,14 @@
 
   function request(type: string, payload = {}) {
     const id = ++requestSequence
-    const promise = new Promise<unknown>((resolve) => pending.set(id, resolve))
+    const promise = new Promise<unknown>((resolve) => pending.set(id, (res) => resolve(res.result)))
+    void invoke('agent_request', { request: { id, type, payload } })
+    return promise
+  }
+
+  function requestRaw(type: string, payload = {}) {
+    const id = ++requestSequence
+    const promise = new Promise<SidecarResponse>((resolve) => pending.set(id, resolve))
     void invoke('agent_request', { request: { id, type, payload } })
     return promise
   }
@@ -119,7 +130,7 @@
   onMount(async () => {
     const unlisten = await listen<AgentEnvelope>('agent-message', ({ payload }) => {
       if (payload.type === 'response' && payload.id) {
-        pending.get(payload.id)?.(payload.result)
+        pending.get(payload.id)?.(payload)
         pending.delete(payload.id)
       }
       if (payload.type === 'event') {
@@ -185,6 +196,46 @@
     if (!sidecarReady) return
     diffContent = await request('git_diff', { cwd: workspacePath, path: file }) as string
     panel = '变更'
+  }
+
+  function isStaged(code: string) {
+    return code[0] !== ' ' && code[0] !== '?'
+  }
+
+  async function runGit(type: string, payload: Record<string, unknown>) {
+    gitError = ''
+    const res = await requestRaw(type, payload)
+    if (!res.ok) {
+      gitError = res.error || '操作失败'
+      return false
+    }
+    commitMessage = ''
+    staged = {}
+    await refreshGit()
+    return true
+  }
+
+  async function stageFiles() {
+    const paths = gitChanges.filter((change) => (staged[change.path] ?? false) && !isStaged(change.code)).map((change) => change.path)
+    if (!paths.length) return
+    const ok = await confirm(`确认暂存勾选的 ${paths.length} 个文件？`, { title: '暂存更改', kind: 'warning' })
+    if (!ok) return
+    await runGit('git_add', { cwd: workspacePath, paths })
+  }
+
+  async function commitChanges() {
+    const message = commitMessage.trim()
+    if (!message) return
+    const stagedCount = gitChanges.filter((change) => isStaged(change.code)).length
+    const ok = await confirm(`确认提交「${message}」？将提交当前全部已暂存的 ${stagedCount} 个文件。`, { title: '提交更改', kind: 'warning' })
+    if (!ok) return
+    await runGit('git_commit', { cwd: workspacePath, message })
+  }
+
+  async function pushChanges() {
+    const ok = await confirm('确认将本地提交推送到远程仓库？', { title: '推送', kind: 'warning' })
+    if (!ok) return
+    await runGit('git_push', { cwd: workspacePath })
   }
 
   async function saveFile() {
@@ -364,7 +415,32 @@
             <article class="document"><div class="eyebrow">PI AGENT 工作方案</div><h2>轻量化桌面 Agent<br />工作台</h2><p class="lead">基于 Percho 能力重构的个人 Pi Agent 桌面端，使用更轻量的 Tauri 壳和清晰的工作区布局。</p><div class="callout"><strong>设计原则</strong><p>让 Agent 的工作过程透明，让工作结果始终可审阅。</p></div><h3>一、核心定位</h3><p>它不是传统 IDE，也不是普通聊天软件，而是一个围绕 Agent 工作流设计的桌面应用。</p><h3>二、功能分区</h3><div class="mini-list"><div><b>01</b><span><strong>会话</strong><small>多项目、多会话、持久化历史</small></span></div><div><b>02</b><span><strong>过程</strong><small>Thinking、工具调用、插话与排队</small></span></div><div><b>03</b><span><strong>结果</strong><small>文档、Diff、终端与运行任务</small></span></div></div></article>
           {/if}
         {:else if panel === '变更'}
-          <div class="panel-content"><div class="panel-title"><div><strong>工作区变更</strong><small>{gitChanges.length} 个文件已修改</small></div><button class="primary-small" on:click={() => void refreshGit()}>刷新</button></div>{#each gitChanges as change}<button class="change-item" on:click={() => void loadDiff(change.path)}><span class="file-dot" class:modified={change.code.includes('M')} class:added={change.code.includes('A') || change.code.includes('?')}>{change.code.includes('A') || change.code.includes('?') ? 'A' : 'M'}</span><div><strong>{change.path}</strong><small>{change.code}</small></div></button>{:else}<div class="diff-placeholder">当前工作区没有未提交变更</div>{/each}{#if diffContent}<pre class="diff-content">{diffContent}</pre>{/if}</div>
+          <div class="git-panel">
+            <div class="panel-content">
+              <div class="panel-title"><div><strong>工作区变更</strong><small>{gitChanges.length} 个文件已修改</small></div><button class="primary-small" on:click={() => void refreshGit()}>刷新</button></div>
+              <div class="git-changes">
+                {#each gitChanges as change}
+                  <div class="change-item" role="button" tabindex="0" on:click={() => void loadDiff(change.path)} on:keydown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); void loadDiff(change.path) } }}>
+                    <input class="change-check" type="checkbox" checked={staged[change.path] ?? false} on:click={(event) => event.stopPropagation()} on:change={() => (staged = { ...staged, [change.path]: !(staged[change.path] ?? false) })} />
+                    <span class="file-dot" class:modified={change.code.includes('M')} class:added={change.code.includes('A') || change.code.includes('?')}>{change.code.includes('A') || change.code.includes('?') ? 'A' : 'M'}</span>
+                    <div class="change-meta"><strong>{change.path}</strong><small>{change.code}</small></div>
+                  </div>
+                {:else}
+                  <div class="diff-placeholder">当前工作区没有未提交变更</div>
+                {/each}
+                {#if diffContent}<pre class="diff-content">{diffContent}</pre>{/if}
+              </div>
+            </div>
+            <div class="git-actions">
+              {#if gitError}<div class="git-error">{gitError}</div>{/if}
+              <input class="commit-input" bind:value={commitMessage} placeholder="提交信息…" />
+              <div class="git-actions-row">
+                <button disabled={!sidecarReady} on:click={() => void stageFiles()}>暂存</button>
+                <button disabled={!sidecarReady} on:click={() => void commitChanges()}>提交</button>
+                <button disabled={!sidecarReady} on:click={() => void pushChanges()}>推送</button>
+              </div>
+            </div>
+          </div>
         {:else if panel === '终端'}
           <Terminal visible={panel === '终端'} />
         {:else}
