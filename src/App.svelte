@@ -14,7 +14,7 @@
   type SidecarResponse = { type: 'response'; id: number; ok: boolean; result: unknown; error?: string }
   type SentMessage = { text: string; at: string }
   type RunSlot = { reply: string; thinking: string; tool: string; running: boolean; queue: string[]; sent: SentMessage[]; confirm?: { confirmId: string; toolName: string; summary: string } }
-  type SettingsInfo = { node: string; sdk: string; agentDir: string; sessionDir: string; authProviders: string[] }
+  type SettingsInfo = { node: string; sdk: string; agentDir: string; sessionDir: string; authProviders: string[]; providers?: Array<{ provider: string; modelCount: number; configured: boolean }> }
   type CtxStats = { currentContext: number; window: number; totals: { input: number; output: number; cacheRead: number; cacheWrite: number; total: number }; costUsd: number; cacheHitRate: number }
   const CTX_CIRC = 2 * Math.PI * 7
   const EMPTY_CTX: CtxStats = { currentContext: 0, window: 0, totals: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 }, costUsd: 0, cacheHitRate: 0 }
@@ -47,6 +47,12 @@
   let modelOpen = false
   let modelMenuUp = false
   let modelQuery = ''
+  let hiddenProviders: string[] = []
+  let providers: Array<{ provider: string; modelCount: number; configured: boolean }> = []
+
+  function loadHiddenProviders() {
+    try { hiddenProviders = JSON.parse(localStorage.getItem('pdn.hidden-providers') ?? '[]') as string[] } catch { hiddenProviders = [] }
+  }
   let modelSearchInput: HTMLInputElement
   let modelButtonRef: HTMLButtonElement
   let settingsInfo: SettingsInfo | null = null
@@ -56,13 +62,15 @@
   let ctxButtonRef: HTMLButtonElement
   let thinkingOpen = false
   let thinkingMenuUp = false
+  let thinkingDraft = ''
+  let thinkingHelp = false
   let thinkingButtonRef: HTMLButtonElement
   let modeOpen = false
   let modeMenuUp = false
   let modeButtonRef: HTMLButtonElement
   let attachments: Array<{ kind: 'image' | 'text'; name: string; mimeType?: string; data?: string; content?: string }> = []
   let attachError = ''
-  let leftWidth = 238
+  let leftWidth = 220
   let rightWidth = 344
   let dragging: 'left' | 'right' | null = null
   let dragStartX = 0
@@ -71,6 +79,7 @@
   const MODEL_SEPARATOR = '\u0000'
   const THINKING_LEVELS = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']
   const THINKING_LABELS: Record<string, string> = { off: '关', minimal: '极低', low: '低', medium: '中', high: '高', xhigh: '超高', max: '最大' }
+  const THINKING_HELP: Record<string, string> = { off: '不做额外思考', minimal: '最少推理，响应最快', low: '轻度推理，适合简单任务', medium: '均衡推理深度', high: '深入推理，适合复杂任务', xhigh: '更充分的推理与校验', max: '最深推理，耗时最长' }
   const DEFAULT_THINKING = 'medium'
   const MODE_LABELS: Record<string, string> = { plan: '计划', ask: '默认', full: '完全访问' }
   const MODE_OPTIONS: Array<{ value: string; label: string; desc: string }> = [
@@ -87,12 +96,15 @@
   $: currentModel = models.find((item) => modelKey(item) === currentModelKey)
   $: currentModelLabel = currentModel ? currentModel.name : '选择模型'
   $: modelFilter = modelQuery.trim().toLowerCase()
-  $: modelMatches = modelFilter ? models.filter((item) => item.name.toLowerCase().includes(modelFilter) || item.provider.toLowerCase().includes(modelFilter)) : models
+  $: modelMatches = (modelFilter ? models.filter((item) => item.name.toLowerCase().includes(modelFilter) || item.provider.toLowerCase().includes(modelFilter)) : models).filter((item) => !hiddenProviders.includes(item.provider))
   $: modelDropdownGroups = modelGroups(modelMatches)
   $: currentThinking = thinkingChoice(sessions, activeSessionId)
   $: currentMode = sessionMode(sessions, activeSessionId)
-  $: thinkingIndex = Math.max(0, THINKING_LEVELS.indexOf(currentThinking))
-  $: thinkingLabel = THINKING_LABELS[currentThinking] ?? currentThinking
+  $: thinkingLevel = thinkingDraft || currentThinking
+  $: thinkingIndex = Math.max(0, THINKING_LEVELS.indexOf(thinkingLevel))
+  $: thinkingLabel = THINKING_LABELS[thinkingLevel] ?? thinkingLevel
+  $: thinkingMax = thinkingLevel === THINKING_LEVELS[THINKING_LEVELS.length - 1]
+  $: thinkingPercent = THINKING_LEVELS.length > 1 ? thinkingIndex / (THINKING_LEVELS.length - 1) : 0
   $: if (typeof document !== 'undefined') document.body.classList.toggle('resizing', dragging !== null)
 
   function emptySlot(): RunSlot {
@@ -166,7 +178,7 @@
   }
 
   function statusText() {
-    if (!sidecarReady) return '未连接'
+    if (!sidecarReady) return ''
     const running = Object.values(runState).filter((slot) => slot.running).length
     return running > 0 ? `运行中 · ${running} 个会话` : '就绪'
   }
@@ -279,7 +291,9 @@
 
   function toggleThinking() {
     thinkingOpen = !thinkingOpen
+    thinkingDraft = ''
     if (thinkingOpen) {
+      thinkingHelp = false
       modelOpen = false
       modeOpen = false
       ctxOpen = false
@@ -292,11 +306,11 @@
     return Math.min(max, Math.max(min, value))
   }
 
-  function startDrag(event: MouseEvent, side: 'left' | 'right') {
+  function startDrag(event: MouseEvent, side: 'right') {
     event.preventDefault()
     dragging = side
     dragStartX = event.clientX
-    dragStartWidth = side === 'left' ? leftWidth : rightWidth
+    dragStartWidth = rightWidth
     window.addEventListener('mousemove', onDragMove)
     window.addEventListener('mouseup', stopDrag)
   }
@@ -304,8 +318,7 @@
   function onDragMove(event: MouseEvent) {
     if (!dragging) return
     const delta = event.clientX - dragStartX
-    if (dragging === 'left') leftWidth = clampWidth(dragStartWidth + delta, 180, 480)
-    else rightWidth = clampWidth(dragStartWidth - delta, 240, 480)
+    rightWidth = clampWidth(dragStartWidth - delta, 240, 480)
   }
 
   function stopDrag() {
@@ -314,9 +327,8 @@
     window.removeEventListener('mouseup', stopDrag)
   }
 
-  function resetDrag(side: 'left' | 'right') {
-    if (side === 'left') leftWidth = 238
-    else rightWidth = 344
+  function resetDrag(side: 'right') {
+    rightWidth = 344
   }
 
   // 窗口变窄时收回侧栏宽度，避免左/右栏与聊天区合计超出窗口
@@ -324,16 +336,13 @@
     if (window.innerWidth <= 1050) return
     const grid = document.querySelector('.app-grid') as HTMLElement | null
     const total = grid?.clientWidth ?? window.innerWidth
-    let left = showLeft ? leftWidth : 0
+    let left = showLeft ? 220 : 0
     let right = showRight ? rightWidth : 0
     let overflow = left + right + 430 - total
     if (overflow <= 0) return
     const rightCut = Math.min(overflow, Math.max(0, right - 240))
     right -= rightCut
-    overflow -= rightCut
-    if (overflow > 0) left = Math.max(180, left - overflow)
     if (showRight) rightWidth = right
-    if (showLeft) leftWidth = left
   }
 
   onDestroy(() => {
@@ -418,11 +427,20 @@
     remember(id, { thinking: result?.level })
   }
 
-  function chooseThinking(event: Event) {
-    const index = Number((event.currentTarget as HTMLInputElement).value)
-    const level = THINKING_LEVELS[index]
-    if (!level) return
-    void setThinking(level)
+  // 拖动中只更新本地 draft，松手（change）才提交，避免频繁请求 sidecar
+  function onThinkingInput(event: Event) {
+    const level = THINKING_LEVELS[Number((event.currentTarget as HTMLInputElement).value)]
+    if (level) thinkingDraft = level
+  }
+
+  function onThinkingChange(event: Event) {
+    const level = THINKING_LEVELS[Number((event.currentTarget as HTMLInputElement).value)]
+    thinkingDraft = ''
+    if (level) void setThinking(level)
+  }
+
+  function toggleThinkingHelp() {
+    thinkingHelp = !thinkingHelp
   }
 
   function request(type: string, payload = {}) {
@@ -440,6 +458,7 @@
   }
 
   onMount(async () => {
+    loadHiddenProviders()
     window.addEventListener('resize', clampToViewport)
     clampToViewport()
     const unlisten = await listen<AgentEnvelope>('agent-message', ({ payload }) => {
@@ -609,11 +628,17 @@
     if (sidecarReady) void request('confirm_response', { confirmId: confirm.confirmId, ok })
   }
 
+  async function refreshProviders() {
+    if (!sidecarReady) return
+    providers = await request('list_providers', {}) as typeof providers
+  }
+
   async function openSettings() {
     showSettings = true
     if (sidecarReady) {
       try {
         settingsInfo = await request('info') as SettingsInfo
+        if (settingsInfo?.providers) providers = settingsInfo.providers
       } catch {
         settingsInfo = null
       }
@@ -787,7 +812,6 @@
             <div class="empty-state">
               <div class="empty-mark">π</div>
               <h2>向 Pi Agent 描述任务</h2>
-              <p>Enter 发送并插话 · Alt+Enter 排队 · 运行中可随时停止</p>
               <div class="quick-chips">
                 <button on:click={() => quickPrompt('请分析当前项目的目录结构，梳理主要模块、入口文件和各部分职责，并给出简要说明。')}>分析当前项目结构</button>
                 <button on:click={() => quickPrompt('请检查当前工作区的 Git 变更，总结改动内容、涉及的文件以及可能的风险点。')}>检查工作区变更</button>
@@ -818,7 +842,7 @@
             {#if attachError}<div class="git-error attach-error">{attachError}</div>{/if}
             {#if attachments.length}<div class="attach-chips">{#each attachments as attachment, index (index)}<span class="attach-chip" class:image={attachment.kind === 'image'}>{#if attachment.kind === 'image'}<i></i>{/if}<span class="attach-name">{attachment.name}</span><button aria-label="移除附件" on:click={() => removeAttachment(index)}>×</button></span>{/each}</div>{/if}
             <textarea bind:this={composerInput} bind:value={inputText} on:keydown={handleKeydown} placeholder="输入消息…" rows="2"></textarea>
-            <div class="composer-toolbar"><div class="composer-left"><button class="attach-button" disabled={!sidecarReady} aria-label="添加附件" on:click={() => void addAttachments()}><svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" aria-hidden="true"><line x1="8" y1="3" x2="8" y2="13"/><line x1="3" y1="8" x2="13" y2="8"/></svg></button><div class="mode-dropdown" use:clickOutsideMode><button class="mode-button" class:plan={currentMode === 'plan'} bind:this={modeButtonRef} aria-haspopup="true" aria-expanded={modeOpen} aria-label="权限模式" on:click={toggleMode}><svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round" aria-hidden="true"><path d="M8 1.8 13.5 3.6v4.1c0 3.2-2.2 5.6-5.5 6.6-3.3-1-5.5-3.4-5.5-6.6V3.6L8 1.8Z"/></svg><span>{MODE_LABELS[currentMode] ?? currentMode}</span></button>{#if modeOpen}<div class="mode-menu" class:up={modeMenuUp}>{#each MODE_OPTIONS as option (option.value)}<button class="mode-option" class:selected={option.value === currentMode} on:click={() => void setMode(option.value)}><span class="mode-dot"></span><span class="mode-copy"><strong>{option.label}</strong><small>{option.desc}</small></span></button>{/each}</div>{/if}</div><div class="model-dropdown" use:clickOutside><button class="model-button" bind:this={modelButtonRef} disabled={!models.length} aria-haspopup="listbox" aria-expanded={modelOpen} aria-label="模型" on:click={toggleModel}><span>{currentModelLabel}</span><svg width="8" height="8" viewBox="0 0 8 8" fill="none" aria-hidden="true"><path d="M1.5 2.5 4 5l2.5-2.5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></svg></button>{#if modelOpen}<div class="model-menu" class:up={modelMenuUp}><div class="model-search"><span>⌕</span><input bind:this={modelSearchInput} bind:value={modelQuery} placeholder="搜索模型…" aria-label="搜索模型" /></div><div class="model-list">{#each modelDropdownGroups as group (group.provider)}<div class="model-group-title">{group.provider}</div>{#each group.items as model (modelKey(model))}<button class="model-option" class:selected={modelKey(model) === currentModelKey} on:click={() => pickModel(model)}><span class="model-dot"></span><span class="model-name">{model.name}</span></button>{/each}{:else}<div class="model-empty">没有匹配的模型</div>{/each}</div></div>{/if}</div><div class="thinking-dropdown" use:clickOutsideThinking><button class="thinking-button" bind:this={thinkingButtonRef} disabled={!sidecarReady} aria-haspopup="true" aria-expanded={thinkingOpen} aria-label="思考深度" on:click={toggleThinking}><span>思考：{thinkingLabel}</span><svg width="8" height="8" viewBox="0 0 8 8" fill="none" aria-hidden="true"><path d="M1.5 2.5 4 5l2.5-2.5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></svg></button>{#if thinkingOpen}<div class="thinking-menu" class:up={thinkingMenuUp}><div class="thinking-head"><strong>思考深度</strong><span>{thinkingLabel}</span></div><input class="thinking-range" type="range" min="0" max={THINKING_LEVELS.length - 1} step="1" value={thinkingIndex} aria-label="思考档位" on:change={chooseThinking} /><div class="thinking-ticks">{#each THINKING_LEVELS as level (level)}<i class:on={level === currentThinking}></i>{/each}</div><div class="thinking-ends"><span>更快</span><span>更聪明</span></div></div>{/if}</div></div><div class="composer-right"><div class="ctx-dropdown" use:clickOutsideCtx><button class="ctx-button" class:empty={!activeSessionId || !ctxStats?.window} bind:this={ctxButtonRef} disabled={!sidecarReady} aria-label="上下文用量" aria-haspopup="true" aria-expanded={ctxOpen} on:click={toggleCtx}><svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true"><circle cx="9" cy="9" r="7" fill="none" stroke="currentColor" stroke-width="2"/>{#if ctxStats?.window}<circle cx="9" cy="9" r="7" fill="none" stroke="#5f8466" stroke-width="2" stroke-linecap="round" stroke-dasharray={ctxDash()} transform="rotate(-90 9 9)"/>{/if}</svg></button>{#if ctxOpen}<div class="ctx-menu" class:up={ctxMenuUp}>{#if !activeSessionId}<div class="ctx-empty"><strong>本会话尚未开始</strong><small>发送第一条消息后显示用量</small></div>{:else if !ctxStats?.window}<div class="ctx-empty"><strong>暂无用量数据</strong><small>发送消息后显示上下文占用</small></div>{:else}<div class="ctx-head"><strong>上下文容量（估算）</strong><span>{ctxProgress()}%</span></div><div class="ctx-row"><span>当前上下文</span><span>{fmtWan(ctxStats.currentContext)}</span></div><div class="ctx-row"><span>可用容量</span><span>{fmtWan(Math.max(0, ctxStats.window - ctxStats.currentContext))}</span></div><div class="ctx-row"><span>上下文窗口</span><span>{fmtWan(ctxStats.window)}</span></div><div class="ctx-bar"><i style="width:{ctxProgress()}%"></i></div><div class="ctx-divider"></div><div class="ctx-sub">本会话累计</div><div class="ctx-row"><span>总 Token</span><span>{fmtWan(ctxStats.totals.total)}</span></div><div class="ctx-row"><span>输入</span><span>{fmtWan(ctxStats.totals.input)}</span></div><div class="ctx-row"><span>输出</span><span>{fmtWan(ctxStats.totals.output)}</span></div><div class="ctx-row"><span>缓存读取</span><span>{fmtWan(ctxStats.totals.cacheRead)}</span></div><div class="ctx-row"><span>缓存写入</span><span>{fmtWan(ctxStats.totals.cacheWrite)}</span></div><div class="ctx-divider"></div><div class="ctx-row"><span>本地费率估算</span><span>${ctxStats.costUsd.toFixed(2)}</span></div><div class="ctx-row"><span>平均缓存命中率</span><span>{(ctxStats.cacheHitRate * 100).toFixed(1)}%</span></div><div class="ctx-note">按本地模型费率估算，未提供费率则为 0</div>{/if}</div>{/if}</div><span class="hint">Enter 插话 · Alt+Enter 排队</span><button class:stop={runState[activeSessionId]?.running} class="send" on:click={runState[activeSessionId]?.running ? stop : () => submit('steer')}>{runState[activeSessionId]?.running ? '停止' : '发送'} <span>{runState[activeSessionId]?.running ? '■' : '↑'}</span></button></div></div>
+            <div class="composer-toolbar"><div class="composer-left"><button class="attach-button" disabled={!sidecarReady} aria-label="添加附件" on:click={() => void addAttachments()}><svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" aria-hidden="true"><line x1="8" y1="3" x2="8" y2="13"/><line x1="3" y1="8" x2="13" y2="8"/></svg></button><div class="mode-dropdown" use:clickOutsideMode><button class="mode-button" class:plan={currentMode === 'plan'} bind:this={modeButtonRef} aria-haspopup="true" aria-expanded={modeOpen} aria-label="权限模式" on:click={toggleMode}><svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round" aria-hidden="true"><path d="M8 1.8 13.5 3.6v4.1c0 3.2-2.2 5.6-5.5 6.6-3.3-1-5.5-3.4-5.5-6.6V3.6L8 1.8Z"/></svg><span>{MODE_LABELS[currentMode] ?? currentMode}</span></button>{#if modeOpen}<div class="mode-menu" class:up={modeMenuUp}>{#each MODE_OPTIONS as option (option.value)}<button class="mode-option" class:selected={option.value === currentMode} on:click={() => void setMode(option.value)}><span class="mode-dot"></span><span class="mode-copy"><strong>{option.label}</strong><small>{option.desc}</small></span></button>{/each}</div>{/if}</div><div class="model-dropdown" use:clickOutside><button class="model-button" bind:this={modelButtonRef} disabled={!models.length} aria-haspopup="listbox" aria-expanded={modelOpen} aria-label="模型" on:click={toggleModel}><span>{currentModelLabel}</span><svg width="8" height="8" viewBox="0 0 8 8" fill="none" aria-hidden="true"><path d="M1.5 2.5 4 5l2.5-2.5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></svg></button>{#if modelOpen}<div class="model-menu" class:up={modelMenuUp}><div class="model-search"><span>⌕</span><input bind:this={modelSearchInput} bind:value={modelQuery} placeholder="搜索模型…" aria-label="搜索模型" /></div><div class="model-list">{#each modelDropdownGroups as group (group.provider)}<div class="model-group-title">{group.provider}</div>{#each group.items as model (modelKey(model))}<button class="model-option" class:selected={modelKey(model) === currentModelKey} on:click={() => pickModel(model)}><span class="model-dot"></span><span class="model-name">{model.name}</span></button>{/each}{:else}<div class="model-empty">没有匹配的模型</div>{/each}</div></div>{/if}</div><div class="thinking-dropdown" use:clickOutsideThinking><button class="thinking-button" bind:this={thinkingButtonRef} disabled={!sidecarReady} aria-haspopup="true" aria-expanded={thinkingOpen} aria-label="思考深度" on:click={toggleThinking}><span class="thinking-label">思考：</span><span class="thinking-value">{thinkingLabel}</span><svg width="8" height="8" viewBox="0 0 8 8" fill="none" aria-hidden="true"><path d="M1.5 2.5 4 5l2.5-2.5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></svg></button>{#if thinkingOpen}<div class="thinking-menu" class:up={thinkingMenuUp}><div class="thinking-head"><strong>思考深度</strong><span class:max={thinkingMax}>{thinkingLabel}</span><button class="thinking-help-button" class:on={thinkingHelp} aria-label="档位说明" aria-expanded={thinkingHelp} on:click={toggleThinkingHelp}>?</button></div><div class="thinking-slider" style={`--p:${thinkingPercent}`}><div class="thinking-track"></div><div class="thinking-fill" class:max={thinkingMax}></div><input class="thinking-range" type="range" min="0" max={THINKING_LEVELS.length - 1} step="1" value={thinkingIndex} disabled={!sidecarReady} aria-label="思考档位" on:input={onThinkingInput} on:change={onThinkingChange} /></div><div class="thinking-ends"><span>更快</span><span>更聪明</span></div>{#if thinkingHelp}<ul class="thinking-help">{#each THINKING_LEVELS as level (level)}<li class:on={level === thinkingLevel}><b>{THINKING_LABELS[level]}</b><span>{THINKING_HELP[level]}</span></li>{/each}</ul>{/if}</div>{/if}</div><div class="ctx-dropdown" use:clickOutsideCtx><button class="ctx-button" class:empty={!activeSessionId || !ctxStats?.window} bind:this={ctxButtonRef} disabled={!sidecarReady} aria-label="上下文用量" aria-haspopup="true" aria-expanded={ctxOpen} on:click={toggleCtx}><svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true"><circle cx="9" cy="9" r="7" fill="none" stroke="currentColor" stroke-width="2"/>{#if ctxStats?.window}<circle cx="9" cy="9" r="7" fill="none" stroke="#5f8466" stroke-width="2" stroke-linecap="round" stroke-dasharray={ctxDash()} transform="rotate(-90 9 9)"/>{/if}</svg></button>{#if ctxOpen}<div class="ctx-menu" class:up={ctxMenuUp}>{#if !activeSessionId}<div class="ctx-empty"><strong>本会话尚未开始</strong><small>发送第一条消息后显示用量</small></div>{:else if !ctxStats?.window}<div class="ctx-empty"><strong>暂无用量数据</strong><small>发送消息后显示上下文占用</small></div>{:else}<div class="ctx-head"><strong>上下文容量（估算）</strong><span>{ctxProgress()}%</span></div><div class="ctx-row"><span>当前上下文</span><span>{fmtWan(ctxStats.currentContext)}</span></div><div class="ctx-row"><span>可用容量</span><span>{fmtWan(Math.max(0, ctxStats.window - ctxStats.currentContext))}</span></div><div class="ctx-row"><span>上下文窗口</span><span>{fmtWan(ctxStats.window)}</span></div><div class="ctx-bar"><i style="width:{ctxProgress()}%"></i></div><div class="ctx-divider"></div><div class="ctx-sub">本会话累计</div><div class="ctx-row"><span>总 Token</span><span>{fmtWan(ctxStats.totals.total)}</span></div><div class="ctx-row"><span>输入</span><span>{fmtWan(ctxStats.totals.input)}</span></div><div class="ctx-row"><span>输出</span><span>{fmtWan(ctxStats.totals.output)}</span></div><div class="ctx-row"><span>缓存读取</span><span>{fmtWan(ctxStats.totals.cacheRead)}</span></div><div class="ctx-row"><span>缓存写入</span><span>{fmtWan(ctxStats.totals.cacheWrite)}</span></div><div class="ctx-divider"></div><div class="ctx-row"><span>本地费率估算</span><span>${ctxStats.costUsd.toFixed(2)}</span></div><div class="ctx-row"><span>平均缓存命中率</span><span>{(ctxStats.cacheHitRate * 100).toFixed(1)}%</span></div><div class="ctx-note">按本地模型费率估算，未提供费率则为 0</div>{/if}</div>{/if}</div></div><div class="composer-right"><span class="hint media">Enter 插话 · Alt+Enter 排队</span><button class:stop={runState[activeSessionId]?.running} class="send" on:click={runState[activeSessionId]?.running ? stop : () => submit('steer')}>{runState[activeSessionId]?.running ? '停止' : '发送'} <span>{runState[activeSessionId]?.running ? '■' : '↑'}</span></button></div></div>
           </div>
           <div class="composer-note">Pi Agent 可以读取和修改当前工作区中的文件</div>
         </div>
@@ -879,10 +903,6 @@
           <div class="panel-content"><div class="panel-title"><div><strong>运行中的任务</strong><small>当前没有后台进程</small></div></div><div class="empty-panel"><span>◌</span><strong>暂无运行任务</strong><small>Agent 启动开发服务器后会显示在这里</small></div></div>
         {/if}
       </aside>
-      {#if showLeft}
-        <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
-        <div class="drag-handle" class:dragging={dragging === 'left'} style={`left:${leftWidth - 2.5}px`} role="separator" aria-label="调整左侧栏宽度" on:mousedown={(event) => startDrag(event, 'left')} on:dblclick={() => resetDrag('left')}></div>
-      {/if}
       {#if showRight}
         <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
         <div class="drag-handle" class:dragging={dragging === 'right'} style={`right:${rightWidth - 2.5}px`} role="separator" aria-label="调整右侧栏宽度" on:mousedown={(event) => startDrag(event, 'right')} on:dblclick={() => resetDrag('right')}></div>
@@ -890,5 +910,5 @@
     </div>
     <footer class="statusbar"><span title={workspacePath}>{workspaceBase()}</span><span>{statusText()}</span><span>{sessions.length} 个会话 · 保存至 ~/.pi/agent/sessions</span></footer>
   </div>
-  <Settings open={showSettings} connected={sidecarReady} info={settingsInfo} onclose={() => (showSettings = false)} openDir={openDir} workspacePath={workspacePath} onChooseWorkspace={chooseWorkspace} onOpenRepo={() => void request('open_url', { url: 'https://github.com/TANGZZee/pi-desktop-next' })} />
+  <Settings open={showSettings} connected={sidecarReady} info={settingsInfo} onclose={() => { showSettings = false; loadHiddenProviders() }} openDir={openDir} workspacePath={workspacePath} onChooseWorkspace={chooseWorkspace} onOpenRepo={() => void request('open_url', { url: 'https://github.com/TANGZZee/pi-desktop-next' })} providers={providers} onRefreshProviders={refreshProviders} />
 </div>

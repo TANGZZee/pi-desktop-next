@@ -123,6 +123,33 @@ async function readAuthProviders() {
   }
 }
 
+// 已配置 provider 集合：优先 agentDir/agent/auth.json，兼容 agentDir/auth.json；缺失按空对象处理。
+async function readConfiguredProviders() {
+  const candidates = [path.join(agentDir, 'agent', 'auth.json'), path.join(agentDir, 'auth.json')]
+  for (const file of candidates) {
+    try {
+      const parsed = JSON.parse(await readFile(file, 'utf8'))
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) return new Set(Object.keys(parsed))
+    } catch {
+      // 文件不存在或不可解析时继续尝试下一个位置
+    }
+  }
+  return new Set()
+}
+
+// 按 provider 分组统计模型数量，标注是否已配置；按 modelCount 降序。
+async function providerSummary() {
+  const configured = await readConfiguredProviders()
+  const counts = new Map()
+  for (const model of (await ensureRuntime()).getModels()) {
+    const provider = model?.provider || 'unknown'
+    counts.set(provider, (counts.get(provider) ?? 0) + 1)
+  }
+  return [...counts.entries()]
+    .map(([provider, modelCount]) => ({ provider, modelCount, configured: configured.has(provider) }))
+    .sort((a, b) => b.modelCount - a.modelCount || a.provider.localeCompare(b.provider))
+}
+
 function openDirectory(target) {
   const dir = path.resolve(target)
   try {
@@ -252,7 +279,18 @@ async function handle(request) {
       return
     }
     if (type === 'info') {
-      reply(id, { node: process.version, sdk: sdkVersion, agentDir, sessionDir: path.join(agentDir, 'sessions'), authProviders: await readAuthProviders() })
+      reply(id, {
+        node: process.version,
+        sdk: sdkVersion,
+        agentDir,
+        sessionDir: path.join(agentDir, 'sessions'),
+        authProviders: await readAuthProviders(),
+        providers: await providerSummary(),
+      })
+      return
+    }
+    if (type === 'list_providers') {
+      reply(id, await providerSummary())
       return
     }
     if (type === 'open_dir') {
