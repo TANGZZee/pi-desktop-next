@@ -2,6 +2,7 @@
   import { onMount } from 'svelte'
   import { invoke } from '@tauri-apps/api/core'
   import { listen } from '@tauri-apps/api/event'
+  import { open } from '@tauri-apps/plugin-dialog'
 
   type PanelTab = '文档' | '变更' | '终端' | '运行'
   type Session = { id: string; title: string; time: string; file?: string; state?: 'active' | 'done' }
@@ -17,6 +18,11 @@
   let activeSession = sessions[0].title
   let activeSessionId = sessions[0].id
   let panel: PanelTab = '文档'
+  let leftTab: 'Chats' | 'Files' = 'Chats'
+  let workspacePath = '.'
+  let files: Array<{ path: string; kind: 'file' | 'directory' }> = []
+  let selectedFile = ''
+  let fileContent = ''
   let inputText = ''
   let showThinking = false
   let isRunning = false
@@ -55,6 +61,7 @@
     try {
       await request('init', { cwd: '.' })
       sidecarReady = true
+      await loadFiles()
       const loaded = await request('list_sessions', { cwd: '.' }) as Array<{ id: string; title: string; file: string; modifiedAt: number }>
       if (loaded?.length) {
         sessions = loaded.map((item) => ({ id: item.id, title: item.title, file: item.file, time: new Date(item.modifiedAt).toLocaleDateString() }))
@@ -68,6 +75,29 @@
     return unlisten
   })
 
+  async function loadFiles(cwd = workspacePath) {
+    if (!sidecarReady) return
+    files = await request('list_files', { cwd }) as Array<{ path: string; kind: 'file' | 'directory' }>
+  }
+
+  async function chooseWorkspace() {
+    const selected = await open({ directory: true, multiple: false, title: '选择 Pi Agent 项目' })
+    if (typeof selected !== 'string') return
+    workspacePath = selected
+    if (sidecarReady) {
+      await request('set_workspace', { cwd: selected })
+      await loadFiles(selected)
+    }
+  }
+
+  async function previewFile(file: string) {
+    selectedFile = file
+    if (sidecarReady) {
+      const result = await request('read_file', { cwd: workspacePath, path: file }) as { content: string }
+      fileContent = result.content
+      panel = '文档'
+    }
+  }
   async function selectSession(session: Session) {
     activeSessionId = session.id
     activeSession = session.title
@@ -118,7 +148,7 @@
       </div>
       <div class="brand"><span class="brand-mark">π</span><span>Pi Agent</span></div>
       <div class="title-actions">
-        <button class="workspace-button"><span class="folder-icon">⌂</span> 日常工作区 <span class="chevron">⌄</span></button>
+        <button class="workspace-button" on:click={chooseWorkspace}><span class="folder-icon">⌂</span> {workspacePath === '.' ? '选择工作区' : workspacePath.split(/[\\/]/).pop()} <span class="chevron">⌄</span></button>
         <button class="icon-button" aria-label="搜索">⌕</button>
         <button class="icon-button" aria-label="设置">⚙</button>
       </div>
@@ -145,8 +175,10 @@
         </div>
 
         <div class="segmented">
-          <button class="selected">Chats</button><button>Files</button>
+          <button class:selected={leftTab === 'Chats'} on:click={() => (leftTab = 'Chats')}>Chats</button><button class:selected={leftTab === 'Files'} on:click={() => { leftTab = 'Files'; void loadFiles() }}>Files</button>
         </div>
+        {#if leftTab === 'Chats'}
+
         <label class="search"><span>⌕</span><input placeholder="搜索会话" /></label>
 
         <div class="session-heading"><span>会话</span><button aria-label="排序">⇅</button></div>
@@ -159,6 +191,15 @@
             </button>
           {/each}
         </div>
+        {:else}
+          <div class="file-list">
+            {#each files as file}
+              <button class:file-folder={file.kind === 'directory'} on:click={() => file.kind === 'file' && void previewFile(file.path)}><span>{file.kind === 'directory' ? '▸' : '·'}</span>{file.path}</button>
+            {:else}
+              <div class="file-empty">选择项目目录后显示文件</div>
+            {/each}
+          </div>
+        {/if}
 
         <div class="sidebar-bottom">
           <button><span>◈</span> 模型 <small>GLM 5.2</small></button>
@@ -210,7 +251,11 @@
         <div class="workspace-tabs">{#each ['文档', '变更', '终端', '运行'] as tab}<button class:active={panel === tab} on:click={() => (panel = tab as PanelTab)}>{tab}{#if tab === '变更'}<span class="badge">3</span>{/if}</button>{/each}</div>
         {#if panel === '文档'}
           <div class="document-toolbar"><span>Markdown · 278 行</span><span class="live-label"><i></i> Live</span><button>Source</button><button class="preview">Preview</button></div>
-          <article class="document"><div class="eyebrow">PI AGENT 工作方案</div><h2>轻量化桌面 Agent<br />工作台</h2><p class="lead">基于 Percho 能力重构的个人 Pi Agent 桌面端，使用更轻量的 Tauri 壳和清晰的工作区布局。</p><div class="callout"><strong>设计原则</strong><p>让 Agent 的工作过程透明，让工作结果始终可审阅。</p></div><h3>一、核心定位</h3><p>它不是传统 IDE，也不是普通聊天软件，而是一个围绕 Agent 工作流设计的桌面应用。</p><h3>二、功能分区</h3><div class="mini-list"><div><b>01</b><span><strong>会话</strong><small>多项目、多会话、持久化历史</small></span></div><div><b>02</b><span><strong>过程</strong><small>Thinking、工具调用、插话与排队</small></span></div><div><b>03</b><span><strong>结果</strong><small>文档、Diff、终端与运行任务</small></span></div></div></article>
+          {#if selectedFile}
+            <article class="document"><div class="eyebrow">FILE PREVIEW</div><h2>{selectedFile}</h2><pre class="file-preview">{fileContent}</pre></article>
+          {:else}
+            <article class="document"><div class="eyebrow">PI AGENT 工作方案</div><h2>轻量化桌面 Agent<br />工作台</h2><p class="lead">基于 Percho 能力重构的个人 Pi Agent 桌面端，使用更轻量的 Tauri 壳和清晰的工作区布局。</p><div class="callout"><strong>设计原则</strong><p>让 Agent 的工作过程透明，让工作结果始终可审阅。</p></div><h3>一、核心定位</h3><p>它不是传统 IDE，也不是普通聊天软件，而是一个围绕 Agent 工作流设计的桌面应用。</p><h3>二、功能分区</h3><div class="mini-list"><div><b>01</b><span><strong>会话</strong><small>多项目、多会话、持久化历史</small></span></div><div><b>02</b><span><strong>过程</strong><small>Thinking、工具调用、插话与排队</small></span></div><div><b>03</b><span><strong>结果</strong><small>文档、Diff、终端与运行任务</small></span></div></div></article>
+          {/if}
         {:else if panel === '变更'}
           <div class="panel-content"><div class="panel-title"><div><strong>工作区变更</strong><small>3 个文件已修改</small></div><button class="primary-small">提交变更</button></div><div class="change-item"><span class="file-dot modified">M</span><div><strong>src/App.svelte</strong><small>+42 −18</small></div></div><div class="change-item"><span class="file-dot modified">M</span><div><strong>src/app.css</strong><small>+118 −0</small></div></div><div class="change-item"><span class="file-dot added">A</span><div><strong>src/lib/agent.ts</strong><small>新文件</small></div></div><div class="diff-placeholder">选择文件查看 Diff</div></div>
         {:else if panel === '终端'}

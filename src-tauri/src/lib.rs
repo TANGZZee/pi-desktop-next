@@ -68,6 +68,7 @@ fn agent_status(state: tauri::State<'_, Mutex<Option<Sidecar>>>) -> bool {
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
+        .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             let sidecar = spawn_sidecar(app.handle())?;
             app.manage(Mutex::new(Some(sidecar)));

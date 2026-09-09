@@ -3,6 +3,7 @@ import { createAgentSession, ModelRuntime, SessionManager } from '@earendil-work
 import readline from 'node:readline'
 import os from 'node:os'
 import path from 'node:path'
+import { readdir, readFile, stat } from 'node:fs/promises'
 
 const sessions = new Map()
 let runtime
@@ -62,6 +63,31 @@ async function listSessions(cwd = workspace) {
   const infos = await SessionManager.list(cwd, path.join(agentDir, 'sessions'))
   return infos.map((info) => ({ id: info.id, title: info.name || '未命名会话', cwd: info.cwd || cwd, file: info.path, modifiedAt: info.modified.getTime() }))
 }
+async function listFiles(cwd = workspace) {
+  const root = path.resolve(cwd)
+  const output = []
+  async function visit(dir, depth) {
+    if (depth > 2 || output.length >= 300) return
+    for (const entry of await readdir(dir, { withFileTypes: true })) {
+      if (entry.name.startsWith('.') || ['node_modules', 'dist', 'target'].includes(entry.name)) continue
+      const absolute = path.join(dir, entry.name)
+      const relative = path.relative(root, absolute).replaceAll('\\', '/')
+      if (entry.isDirectory()) { output.push({ path: relative, kind: 'directory' }); await visit(absolute, depth + 1) }
+      else output.push({ path: relative, kind: 'file' })
+    }
+  }
+  await visit(root, 0)
+  return output
+}
+
+async function readWorkspaceFile(cwd, file) {
+  const root = path.resolve(cwd)
+  const absolute = path.resolve(root, file)
+  if (absolute !== root && !absolute.startsWith(`${root}${path.sep}`)) throw new Error('禁止读取工作区外的文件')
+  const info = await stat(absolute)
+  if (!info.isFile() || info.size > 512 * 1024) throw new Error('文件不存在或超过 512 KB')
+  return { path: path.relative(root, absolute).replaceAll('\\', '/'), content: await readFile(absolute, 'utf8') }
+}
 async function handle(request) {
   const { id, type, payload = {} } = request
   try {
@@ -74,6 +100,19 @@ async function handle(request) {
     if (type === 'list_models') {
       const models = (await ensureRuntime()).getModels().map((model) => ({ provider: model.provider, id: model.id, name: model.name, reasoning: model.reasoning }))
       reply(id, models)
+      return
+    }
+    if (type === 'set_workspace') {
+      workspace = path.resolve(payload.cwd || workspace)
+      reply(id, { cwd: workspace, files: await listFiles(workspace) })
+      return
+    }
+    if (type === 'list_files') {
+      reply(id, await listFiles(payload.cwd || workspace))
+      return
+    }
+    if (type === 'read_file') {
+      reply(id, await readWorkspaceFile(payload.cwd || workspace, payload.path))
       return
     }
     if (type === 'create_session') {
