@@ -72,6 +72,9 @@
   let modeOpen = false
   let modeMenuUp = false
   let modeButtonRef: HTMLButtonElement
+  let kindOpen = false
+  let kindMenuUp = false
+  let kindButtonRef: HTMLButtonElement
   let attachments: Array<{ kind: 'image' | 'text'; name: string; mimeType?: string; data?: string; content?: string }> = []
   let imageGenMode = false
   let imageGenBusy = false
@@ -101,7 +104,20 @@
 
   $: filteredSessions = sessions.filter((item) => !item.archived && item.title.toLowerCase().includes(query.toLowerCase())).sort((a, b) => Number(b.pinned) - Number(a.pinned))
   $: filteredFiles = files.filter((item) => item.path.toLowerCase().includes(query.toLowerCase()))
-  $: projectItems = files.filter((item) => item.kind === 'directory' && item.path.toLowerCase().includes(query.toLowerCase()))
+  let openDirs: Record<string, boolean> = {}
+  function fileName(path: string) {
+    return path.split('/').pop() || path
+  }
+  function treeChildren(prefix: string) {
+    const base = prefix ? `${prefix}/` : ''
+    return filteredFiles.filter((item) => {
+      const rest = prefix ? (item.path.startsWith(base) ? item.path.slice(base.length) : '') : item.path
+      return rest !== '' && !rest.includes('/')
+    })
+  }
+  function toggleDir(path: string) {
+    openDirs = { ...openDirs, [path]: !openDirs[path] }
+  }
   $: currentModelKey = modelChoice(models, sessions, activeSessionId)
   $: currentModel = models.find((item) => modelKey(item) === currentModelKey)
   $: currentModelLabel = currentModel ? currentModel.name : '选择模型'
@@ -340,9 +356,45 @@
     }
   }
 
+  function clickOutsideKind(node: HTMLElement) {
+    function onMouseDown(event: MouseEvent) {
+      if (!node.contains(event.target as Node)) kindOpen = false
+    }
+    function onKeydown(event: KeyboardEvent) {
+      if (event.key === 'Escape') kindOpen = false
+    }
+    window.addEventListener('mousedown', onMouseDown)
+    window.addEventListener('keydown', onKeydown)
+    return {
+      destroy() {
+        window.removeEventListener('mousedown', onMouseDown)
+        window.removeEventListener('keydown', onKeydown)
+      }
+    }
+  }
+
+  function toggleKind() {
+    kindOpen = !kindOpen
+    if (kindOpen) {
+      modeOpen = false
+      modelOpen = false
+      thinkingOpen = false
+      ctxOpen = false
+      const rect = kindButtonRef?.getBoundingClientRect()
+      if (rect) kindMenuUp = window.innerHeight - rect.bottom < 180
+    }
+  }
+
+  function setAgentKind(next: boolean) {
+    imageGenMode = next
+    imageGenError = ''
+    kindOpen = false
+  }
+
   function toggleMode() {
     modeOpen = !modeOpen
     if (modeOpen) {
+      kindOpen = false
       modelOpen = false
       thinkingOpen = false
       ctxOpen = false
@@ -368,6 +420,7 @@
       modelOpen = false
       modeOpen = false
       ctxOpen = false
+      kindOpen = false
       const rect = thinkingButtonRef?.getBoundingClientRect()
       if (rect) thinkingMenuUp = window.innerHeight - rect.bottom < 220
     }
@@ -428,6 +481,7 @@
       modelOpen = false
       thinkingOpen = false
       modeOpen = false
+      kindOpen = false
       const rect = ctxButtonRef?.getBoundingClientRect()
       if (rect) ctxMenuUp = window.innerHeight - rect.bottom < 320
       void refreshCtxStats()
@@ -464,6 +518,7 @@
       thinkingOpen = false
       modeOpen = false
       ctxOpen = false
+      kindOpen = false
       modelQuery = ''
       const rect = modelButtonRef?.getBoundingClientRect()
       if (rect) modelMenuUp = window.innerHeight - rect.bottom < 360
@@ -871,10 +926,8 @@
         {#if leftTab === 'Projects'}
           <div class="sidebar-section-heading"><span>项目</span><span><button aria-label="选择工作区" on:click={() => void chooseWorkspace()}>＋</button><button aria-label="项目选项">×</button></span></div>
           <div class="project-list">
-            {#if projectItems.length}
-              {#each projectItems as file}
-                <button class="project-item" on:click={() => void chooseWorkspace()}><span class="project-chevron">›</span><span class="project-folder">□</span><span class="project-name">{file.path}</span></button>
-              {/each}
+            {#if workspacePath !== '.'}
+              <button class="project-item current"><span class="project-folder">□</span><span class="project-name">{workspaceBase()}</span></button>
             {:else}
               <div class="file-empty">选择项目目录后显示内容</div>
             {/if}
@@ -961,8 +1014,8 @@
           <div class="composer">
             {#if attachError}<div class="git-error attach-error">{attachError}</div>{/if}
             {#if attachments.length}<div class="attach-chips">{#each attachments as attachment, index (index)}<span class="attach-chip" class:image={attachment.kind === 'image'}>{#if attachment.kind === 'image'}<i></i>{/if}<span class="attach-name">{attachment.name}</span><button aria-label="移除附件" on:click={() => removeAttachment(index)}>×</button></span>{/each}</div>{/if}
-            <textarea bind:this={composerInput} bind:value={inputText} on:keydown={handleKeydown} placeholder={imageGenMode ? '描述要生成的图片…' : '输入消息…'} rows="2"></textarea>
-            <div class="composer-toolbar"><div class="composer-controls"><button class="attach-button" disabled={!sidecarReady} aria-label="添加附件" on:click={() => void addAttachments()}><svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" aria-hidden="true"><line x1="8" y1="3" x2="8" y2="13"/><line x1="3" y1="8" x2="13" y2="8"/></svg></button><button class="imagegen-button" class:active={imageGenMode} aria-label="生图模式" on:click={() => { imageGenMode = !imageGenMode; imageGenError = '' }}><span>✦</span><b>生图</b></button><div class="mode-dropdown" use:clickOutsideMode><button class="mode-button" class:plan={currentMode === 'plan'} bind:this={modeButtonRef} aria-haspopup="true" aria-expanded={modeOpen} aria-label="权限模式" on:click={toggleMode}><svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round" aria-hidden="true"><path d="M8 1.8 13.5 3.6v4.1c0 3.2-2.2 5.6-5.5 6.6-3.3-1-5.5-3.4-5.5-6.6V3.6L8 1.8Z"/></svg><span>{MODE_LABELS[currentMode] ?? currentMode}</span></button>{#if modeOpen}<div class="mode-menu" class:up={modeMenuUp}>{#each MODE_OPTIONS as option (option.value)}<button class="mode-option" class:selected={option.value === currentMode} on:click={() => void setMode(option.value)}><span class="mode-dot"></span><span class="mode-copy"><strong>{option.label}</strong><small>{option.desc}</small></span></button>{/each}</div>{/if}</div><div class="model-dropdown" use:clickOutside><button class="model-button" bind:this={modelButtonRef} disabled={!models.length} aria-haspopup="listbox" aria-expanded={modelOpen} aria-label="模型" on:click={toggleModel}><span>{currentModelLabel}</span><svg width="8" height="8" viewBox="0 0 8 8" fill="none" aria-hidden="true"><path d="M1.5 2.5 4 5l2.5-2.5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></svg></button>{#if modelOpen}<div class="model-menu" class:up={modelMenuUp}><div class="model-search"><span>⌕</span><input bind:this={modelSearchInput} bind:value={modelQuery} placeholder="搜索模型…" aria-label="搜索模型" /></div><div class="model-list">{#each modelDropdownGroups as group (group.provider)}<div class="model-group-title">{group.provider}</div>{#each group.items as model (modelKey(model))}<button class="model-option" class:selected={modelKey(model) === currentModelKey} on:click={() => pickModel(model)}><span class="model-dot"></span><span class="model-name">{model.name}</span></button>{/each}{:else}<div class="model-empty">没有匹配的模型</div>{/each}</div></div>{/if}</div><div class="thinking-dropdown" use:clickOutsideThinking><button class="thinking-button" bind:this={thinkingButtonRef} disabled={!sidecarReady} aria-haspopup="true" aria-expanded={thinkingOpen} aria-label="思考深度" on:click={toggleThinking}><span class="thinking-label">思考：</span><span class="thinking-value">{thinkingLabel}</span><svg width="8" height="8" viewBox="0 0 8 8" fill="none" aria-hidden="true"><path d="M1.5 2.5 4 5l2.5-2.5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></svg></button>{#if thinkingOpen}<div class="thinking-menu" class:up={thinkingMenuUp}><div class="thinking-head"><strong>思考深度</strong><span class:max={thinkingMax}>{thinkingLabel}</span><button class="thinking-help-button" class:on={thinkingHelp} aria-label="档位说明" aria-expanded={thinkingHelp} on:click={toggleThinkingHelp}>?</button></div><div class="thinking-slider" style={`--p:${thinkingPercent}`}><div class="thinking-track"></div><div class="thinking-fill" class:max={thinkingMax}>{#if thinkingMax}<i class="thinking-pixel pixel-1"></i><i class="thinking-pixel pixel-2"></i><i class="thinking-pixel pixel-3"></i><i class="thinking-pixel pixel-4"></i><i class="thinking-pixel pixel-5"></i><i class="thinking-pixel pixel-6"></i><i class="thinking-pixel pixel-7"></i><i class="thinking-pixel pixel-8"></i>{/if}</div><input class="thinking-range" type="range" min="0" max={THINKING_LEVELS.length - 1} step="1" value={thinkingIndex} disabled={!sidecarReady} aria-label="思考档位" on:input={onThinkingInput} on:change={onThinkingChange} /></div><div class="thinking-ends"><span>更快</span><span>更聪明</span></div>{#if thinkingHelp}<ul class="thinking-help">{#each THINKING_LEVELS as level (level)}<li class:on={level === thinkingLevel}><b>{THINKING_LABELS[level]}</b><span>{THINKING_HELP[level]}</span></li>{/each}</ul>{/if}</div>{/if}</div><div class="ctx-dropdown" use:clickOutsideCtx><button class="ctx-button" class:empty={!activeSessionId || !ctxStats?.window} bind:this={ctxButtonRef} disabled={!sidecarReady} aria-label="上下文用量" aria-haspopup="true" aria-expanded={ctxOpen} on:click={toggleCtx}><svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true"><circle cx="9" cy="9" r="7" fill="none" stroke="currentColor" stroke-width="2"/>{#if ctxStats?.window}<circle cx="9" cy="9" r="7" fill="none" stroke="#5f8466" stroke-width="2" stroke-linecap="round" stroke-dasharray={ctxDash()} transform="rotate(-90 9 9)"/>{/if}</svg></button>{#if ctxOpen}<div class="ctx-menu" class:up={ctxMenuUp}>{#if !activeSessionId}<div class="ctx-empty"><strong>本会话尚未开始</strong><small>发送第一条消息后显示用量</small></div>{:else if !ctxStats?.window}<div class="ctx-empty"><strong>暂无用量数据</strong><small>发送消息后显示上下文占用</small></div>{:else}<div class="ctx-head"><strong>上下文容量（估算）</strong><span>{ctxProgress()}%</span></div><div class="ctx-row"><span>当前上下文</span><span>{fmtWan(ctxStats.currentContext)}</span></div><div class="ctx-row"><span>可用容量</span><span>{fmtWan(Math.max(0, ctxStats.window - ctxStats.currentContext))}</span></div><div class="ctx-row"><span>上下文窗口</span><span>{fmtWan(ctxStats.window)}</span></div><div class="ctx-bar"><i style="width:{ctxProgress()}%"></i></div><div class="ctx-divider"></div><div class="ctx-sub">本会话累计</div><div class="ctx-row"><span>总 Token</span><span>{fmtWan(ctxStats.totals.total)}</span></div><div class="ctx-row"><span>输入</span><span>{fmtWan(ctxStats.totals.input)}</span></div><div class="ctx-row"><span>输出</span><span>{fmtWan(ctxStats.totals.output)}</span></div><div class="ctx-row"><span>缓存读取</span><span>{fmtWan(ctxStats.totals.cacheRead)}</span></div><div class="ctx-row"><span>缓存写入</span><span>{fmtWan(ctxStats.totals.cacheWrite)}</span></div><div class="ctx-divider"></div><div class="ctx-row"><span>本地费率估算</span><span>${ctxStats.costUsd.toFixed(2)}</span></div><div class="ctx-row"><span>平均缓存命中率</span><span>{(ctxStats.cacheHitRate * 100).toFixed(1)}%</span></div><div class="ctx-note">按本地模型费率估算，未提供费率则为 0</div>{/if}</div>{/if}</div></div><div class="composer-right"><button class:imagegen-busy={imageGenBusy} class:stop={runState[activeSessionId]?.running} class="send" title={imageGenMode ? '生成图片' : runState[activeSessionId]?.running ? '停止当前任务' : '发送消息'} on:click={imageGenMode ? generateImage : runState[activeSessionId]?.running ? stop : () => submit('steer')}>{imageGenBusy ? '…' : imageGenMode ? '✦' : runState[activeSessionId]?.running ? '停止' : '发送'} <span>{imageGenBusy ? '' : imageGenMode ? '' : runState[activeSessionId]?.running ? '■' : '↑'}</span></button></div></div>
+            <textarea bind:this={composerInput} bind:value={inputText} on:keydown={handleKeydown} placeholder={imageGenMode ? '描述要生成的图片…' : '输入消息，@ 引用文件，/ 运行命令'} rows="2"></textarea>
+            <div class="composer-toolbar"><div class="composer-controls"><div class="kind-dropdown" use:clickOutsideKind><button class="kind-button" bind:this={kindButtonRef} aria-haspopup="true" aria-expanded={kindOpen} aria-label="输入模式" on:click={toggleKind}><img src={logoUrl} alt="" /><span>{imageGenMode ? '生图' : 'Pi'}</span><svg width="8" height="8" viewBox="0 0 8 8" fill="none" aria-hidden="true"><path d="M1.5 2.5 4 5l2.5-2.5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></svg></button>{#if kindOpen}<div class="kind-menu" class:up={kindMenuUp}><button class:selected={!imageGenMode} on:click={() => setAgentKind(false)}><img src={logoUrl} alt="" /><span>Pi</span></button><button class:selected={imageGenMode} on:click={() => setAgentKind(true)}><span>生图</span></button></div>{/if}</div><button class="attach-button" disabled={!sidecarReady} aria-label="添加附件" on:click={() => void addAttachments()}><svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" aria-hidden="true"><line x1="8" y1="3" x2="8" y2="13"/><line x1="3" y1="8" x2="13" y2="8"/></svg></button><div class="mode-dropdown" use:clickOutsideMode><button class="mode-button" class:plan={currentMode === 'plan'} bind:this={modeButtonRef} aria-haspopup="true" aria-expanded={modeOpen} aria-label="权限模式" on:click={toggleMode}><svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round" aria-hidden="true"><path d="M8 1.8 13.5 3.6v4.1c0 3.2-2.2 5.6-5.5 6.6-3.3-1-5.5-3.4-5.5-6.6V3.6L8 1.8Z"/></svg><span>{MODE_LABELS[currentMode] ?? currentMode}</span></button>{#if modeOpen}<div class="mode-menu" class:up={modeMenuUp}>{#each MODE_OPTIONS as option (option.value)}<button class="mode-option" class:selected={option.value === currentMode} on:click={() => void setMode(option.value)}><span class="mode-dot"></span><span class="mode-copy"><strong>{option.label}</strong><small>{option.desc}</small></span></button>{/each}</div>{/if}</div><div class="model-dropdown" use:clickOutside><button class="model-button" bind:this={modelButtonRef} disabled={!models.length} aria-haspopup="listbox" aria-expanded={modelOpen} aria-label="模型" on:click={toggleModel}><span>{currentModelLabel}</span><svg width="8" height="8" viewBox="0 0 8 8" fill="none" aria-hidden="true"><path d="M1.5 2.5 4 5l2.5-2.5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></svg></button>{#if modelOpen}<div class="model-menu" class:up={modelMenuUp}><div class="model-search"><span>⌕</span><input bind:this={modelSearchInput} bind:value={modelQuery} placeholder="搜索模型…" aria-label="搜索模型" /></div><div class="model-list">{#each modelDropdownGroups as group (group.provider)}<div class="model-group-title">{group.provider}</div>{#each group.items as model (modelKey(model))}<button class="model-option" class:selected={modelKey(model) === currentModelKey} on:click={() => pickModel(model)}><span class="model-dot"></span><span class="model-name">{model.name}</span></button>{/each}{:else}<div class="model-empty">没有匹配的模型</div>{/each}</div></div>{/if}</div><div class="thinking-dropdown" use:clickOutsideThinking><button class="thinking-button" bind:this={thinkingButtonRef} disabled={!sidecarReady} aria-haspopup="true" aria-expanded={thinkingOpen} aria-label="思考深度" on:click={toggleThinking}><span class="thinking-label">思考：</span><span class="thinking-value">{thinkingLabel}</span><svg width="8" height="8" viewBox="0 0 8 8" fill="none" aria-hidden="true"><path d="M1.5 2.5 4 5l2.5-2.5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></svg></button>{#if thinkingOpen}<div class="thinking-menu" class:up={thinkingMenuUp}><div class="thinking-head"><strong>思考深度</strong><span class:max={thinkingMax}>{thinkingLabel}</span><button class="thinking-help-button" class:on={thinkingHelp} aria-label="档位说明" aria-expanded={thinkingHelp} on:click={toggleThinkingHelp}>?</button></div><div class="thinking-slider" style={`--p:${thinkingPercent}`}><div class="thinking-track"></div><div class="thinking-fill" class:max={thinkingMax}>{#if thinkingMax}<i class="thinking-pixel pixel-1"></i><i class="thinking-pixel pixel-2"></i><i class="thinking-pixel pixel-3"></i><i class="thinking-pixel pixel-4"></i><i class="thinking-pixel pixel-5"></i><i class="thinking-pixel pixel-6"></i><i class="thinking-pixel pixel-7"></i><i class="thinking-pixel pixel-8"></i>{/if}</div><input class="thinking-range" type="range" min="0" max={THINKING_LEVELS.length - 1} step="1" value={thinkingIndex} disabled={!sidecarReady} aria-label="思考档位" on:input={onThinkingInput} on:change={onThinkingChange} /></div><div class="thinking-ends"><span>更快</span><span>更聪明</span></div>{#if thinkingHelp}<ul class="thinking-help">{#each THINKING_LEVELS as level (level)}<li class:on={level === thinkingLevel}><b>{THINKING_LABELS[level]}</b><span>{THINKING_HELP[level]}</span></li>{/each}</ul>{/if}</div>{/if}</div><div class="ctx-dropdown" use:clickOutsideCtx><button class="ctx-button" class:empty={!activeSessionId || !ctxStats?.window} bind:this={ctxButtonRef} disabled={!sidecarReady} aria-label="上下文用量" aria-haspopup="true" aria-expanded={ctxOpen} on:click={toggleCtx}><svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true"><circle cx="9" cy="9" r="7" fill="none" stroke="currentColor" stroke-width="2"/>{#if ctxStats?.window}<circle cx="9" cy="9" r="7" fill="none" stroke="#333" stroke-width="2" stroke-linecap="round" stroke-dasharray={ctxDash()} transform="rotate(-90 9 9)"/>{/if}</svg></button>{#if ctxOpen}<div class="ctx-menu" class:up={ctxMenuUp}>{#if !activeSessionId}<div class="ctx-empty"><strong>本会话尚未开始</strong><small>发送第一条消息后显示用量</small></div>{:else if !ctxStats?.window}<div class="ctx-empty"><strong>暂无用量数据</strong><small>发送消息后显示上下文占用</small></div>{:else}<div class="ctx-head"><strong>上下文容量（估算）</strong><span>{ctxProgress()}%</span></div><div class="ctx-row"><span>当前上下文</span><span>{fmtWan(ctxStats.currentContext)}</span></div><div class="ctx-row"><span>可用容量</span><span>{fmtWan(Math.max(0, ctxStats.window - ctxStats.currentContext))}</span></div><div class="ctx-row"><span>上下文窗口</span><span>{fmtWan(ctxStats.window)}</span></div><div class="ctx-bar"><i style="width:{ctxProgress()}%"></i></div><div class="ctx-divider"></div><div class="ctx-sub">本会话累计</div><div class="ctx-row"><span>总 Token</span><span>{fmtWan(ctxStats.totals.total)}</span></div><div class="ctx-row"><span>输入</span><span>{fmtWan(ctxStats.totals.input)}</span></div><div class="ctx-row"><span>输出</span><span>{fmtWan(ctxStats.totals.output)}</span></div><div class="ctx-row"><span>缓存读取</span><span>{fmtWan(ctxStats.totals.cacheRead)}</span></div><div class="ctx-row"><span>缓存写入</span><span>{fmtWan(ctxStats.totals.cacheWrite)}</span></div><div class="ctx-divider"></div><div class="ctx-row"><span>本地费率估算</span><span>${ctxStats.costUsd.toFixed(2)}</span></div><div class="ctx-row"><span>平均缓存命中率</span><span>{(ctxStats.cacheHitRate * 100).toFixed(1)}%</span></div><div class="ctx-note">按本地模型费率估算，未提供费率则为 0</div>{/if}</div>{/if}</div></div><div class="composer-right"><button class:imagegen-busy={imageGenBusy} class:stop={runState[activeSessionId]?.running} class="send" title={imageGenMode ? '生成图片' : runState[activeSessionId]?.running ? '停止当前任务' : '发送消息'} on:click={imageGenMode ? generateImage : runState[activeSessionId]?.running ? stop : () => submit('steer')}>{imageGenBusy ? '…' : imageGenMode ? '✦' : runState[activeSessionId]?.running ? '停止' : '发送'} <span>{imageGenBusy ? '' : imageGenMode ? '' : runState[activeSessionId]?.running ? '■' : '↑'}</span></button></div></div>
           </div>
         </div>
       </main>
@@ -980,13 +1033,19 @@
         {#if panel === '文档'}
           <div class="resource-head"><span>项目文件</span><button aria-label="刷新文件" on:click={() => void loadFiles()}>↻</button></div>
           <div class="resource-tree">
-            {#each filteredFiles as file}
-              <button class:file-directory={file.kind === 'directory'} class:file-selected={selectedFile === file.path} on:click={() => file.kind === 'file' ? void previewFile(file.path) : void loadFiles()}>
-                <span class="resource-chevron">{file.kind === 'directory' ? '›' : ''}</span><span class="resource-icon">{file.kind === 'directory' ? '□' : '·'}</span><span>{file.path}</span>
-              </button>
-            {:else}
-              <div class="resource-empty">选择工作区后显示文件</div>
-            {/each}
+            {#snippet treeRows(prefix: string, depth: number)}
+              {#each treeChildren(prefix) as file}
+                <button class:file-directory={file.kind === 'directory'} class:file-selected={selectedFile === file.path} class:open={openDirs[file.path]} style={`padding-left:${6 + depth * 12}px`} on:click={() => file.kind === 'file' ? void previewFile(file.path) : toggleDir(file.path)}>
+                  <span class="resource-chevron">{file.kind === 'directory' ? (openDirs[file.path] ? '▾' : '›') : ''}</span><span class="resource-icon">{file.kind === 'directory' ? '□' : '·'}</span><span>{fileName(file.path)}</span>
+                </button>
+                {#if file.kind === 'directory' && openDirs[file.path]}
+                  {@render treeRows(file.path, depth + 1)}
+                {/if}
+              {:else}
+                {#if depth === 0}<div class="resource-empty">选择工作区后显示文件</div>{/if}
+              {/each}
+            {/snippet}
+            {@render treeRows('', 0)}
           </div>
           {#if selectedFile}
             <div class="resource-preview-head"><span class="doc-name">{selectedFile}</span><span class="doc-stats">{documentStats()}</span>{#if !editingFile}<button on:click={() => (editingFile = true)}>编辑</button>{:else}<button on:click={() => void saveFile()}>保存</button><button on:click={() => (editingFile = false)}>取消</button>{/if}</div>

@@ -59,7 +59,7 @@
   .project-list { flex: 1; }
   .project-item, .session { display: flex; align-items: center; width: 100%; min-width: 0; border-radius: 3px; background: transparent; text-align: left; }
   .project-item { gap: 6px; min-height: 30px; padding: 0 6px; color: #3c3c3c; font-size: 11px; }
-  .project-item:hover, .session:hover { background: #e2e2e2; }
+  .project-item:hover, .project-item.current, .session:hover { background: #e2e2e2; }
   .project-chevron, .project-folder { flex: none; color: #777; }
   .project-chevron { width: 8px; font-size: 14px; }
   .project-folder { width: 12px; font-size: 11px; }
@@ -150,9 +150,20 @@
   .composer textarea::placeholder { color: #858585; }
   .composer-toolbar { display: flex; align-items: center; gap: 8px; min-height: 40px; padding: 5px 7px 7px 9px; }
   .composer-controls { display: flex; align-items: center; gap: 4px; min-width: 0; }
-  .composer-right { margin-left: auto; }
+  .composer-right { margin-left: auto; display: flex; align-items: center; gap: 4px; }
+  .kind-dropdown { position: relative; }
+  .kind-button { display: inline-flex; align-items: center; gap: 5px; height: 28px; padding: 0 8px; border-radius: 3px; background: transparent; color: #333; font-size: 11px; }
+  .kind-button img { width: 14px; height: 14px; object-fit: contain; }
+  .kind-button:hover { background: #e8e8e8; }
+  .kind-menu { position: absolute; bottom: calc(100% + 6px); left: 0; z-index: 50; width: 140px; padding: 4px; border: 1px solid #c9c9c9; border-radius: 4px; background: #fff; box-shadow: 0 8px 20px rgb(0 0 0 / 12%); }
+  .kind-menu.up { bottom: auto; top: calc(100% + 6px); }
+  .kind-menu button { display: flex; align-items: center; gap: 8px; width: 100%; min-height: 30px; padding: 0 8px; border-radius: 3px; background: transparent; color: #333; font-size: 11px; text-align: left; }
+  .kind-menu button img { width: 14px; height: 14px; object-fit: contain; }
+  .kind-menu button:hover, .kind-menu button.selected { background: #ededed; }
   .attach-button, .imagegen-button, .mode-button, .model-button, .thinking-button, .ctx-button { display: inline-flex; align-items: center; justify-content: center; gap: 5px; height: 28px; min-width: 28px; padding: 0 8px; border-radius: 3px; background: transparent; color: #565656; font-size: 11px; white-space: nowrap; }
   .attach-button:hover:not(:disabled), .imagegen-button:hover, .imagegen-button.active, .mode-button:hover:not(:disabled), .model-button:hover:not(:disabled), .thinking-button:hover:not(:disabled), .ctx-button:hover:not(:disabled) { background: #e8e8e8; color: #171717; }
+  .mode-button span, .thinking-label { display: none; }
+  .model-button { margin-left: 8px; }
   .attach-button:disabled, .thinking-button:disabled, .model-button:disabled, .ctx-button:disabled { color: #aeaeae; }
   .imagegen-button b { font-weight: 600; }
   .mode-dropdown, .model-dropdown, .thinking-dropdown, .ctx-dropdown { position: relative; }
