@@ -21,10 +21,12 @@ function reply(id, result, error) {
 function summarizeEvent(event) {
   if (!event || typeof event !== 'object') return event
   const copy = { ...event }
-  // Keep the protocol small; the full assistant message is already rebuilt by the UI.
   if (copy.type === 'message_update' && copy.assistantMessageEvent) {
     const inner = copy.assistantMessageEvent
-    copy.assistantMessageEvent = { type: inner.type, delta: inner.delta, text: inner.text, thinking: inner.thinking }
+    return { ...copy, delta: inner.delta, text: inner.text, thinking: inner.thinking, assistantMessageEvent: { type: inner.type, delta: inner.delta, text: inner.text, thinking: inner.thinking } }
+  }
+  if (copy.type === 'tool_execution_start' || copy.type === 'tool_execution_update' || copy.type === 'tool_execution_end') {
+    return { type: copy.type, toolCallId: copy.toolCallId, toolName: copy.toolName, args: copy.args, partialResult: copy.partialResult, result: copy.result, isError: copy.isError }
   }
   return copy
 }

@@ -5,7 +5,7 @@
 
   type PanelTab = '文档' | '变更' | '终端' | '运行'
   type Session = { title: string; time: string; state?: 'active' | 'done' }
-  type AgentEnvelope = { type: string; id?: number; ok?: boolean; result?: unknown; error?: string; sessionId?: string; event?: { type?: string; delta?: string; message?: string } }
+  type AgentEnvelope = { type: string; id?: number; ok?: boolean; result?: unknown; error?: string; sessionId?: string; event?: { type?: string; delta?: string; text?: string; thinking?: string; toolName?: string; partialResult?: unknown; result?: unknown; message?: string } }
 
   const sessions: Session[] = [
     { title: '设计 pi-agent 桌面端', time: '刚刚', state: 'active' },
@@ -21,15 +21,21 @@
   let isRunning = false
   let sentMessages: string[] = []
   let agentReply = ''
+  let thinkingText = ''
+  let toolActivity = ''
   let sidecarReady = false
   let modelCount = 0
+  let queuedMessages: string[] = []
 
   onMount(async () => {
     const unlisten = await listen<AgentEnvelope>('agent-message', ({ payload }) => {
       if (payload.type === 'event') {
         const event = payload.event
         if (event?.type === 'message_update' && event.delta) agentReply += event.delta
-        if (event?.type === 'agent_end' || event?.type === 'error') isRunning = false
+        if (event?.type === 'message_update' && event.thinking) thinkingText += event.thinking
+        if (event?.type === 'tool_execution_start') toolActivity = `正在执行 ${event.toolName || '工具'}…`
+        if (event?.type === 'tool_execution_end') toolActivity = `${event.toolName || '工具'} 已完成`
+        if (event?.type === 'agent_end' || event?.type === 'error') { isRunning = false; toolActivity = '' }
       }
     })
     try {
@@ -43,24 +49,31 @@
     return unlisten
   })
 
-  function submit() {
+  function submit(behavior: 'steer' | 'followUp' = 'steer') {
     const text = inputText.trim()
     if (!text) return
     sentMessages = [...sentMessages, text]
     inputText = ''
     agentReply = ''
+    thinkingText = ''
     isRunning = true
+    if (behavior === 'followUp') queuedMessages = [...queuedMessages, text]
     if (sidecarReady) {
-      void invoke('agent_request', { request: { type: 'prompt', payload: { sessionId: 'main', text, cwd: '.', behavior: 'followUp' } } }).catch(() => (isRunning = false))
+      void invoke('agent_request', { request: { type: 'prompt', payload: { sessionId: 'main', text, cwd: '.', behavior } } }).catch(() => (isRunning = false))
     } else {
       window.setTimeout(() => (isRunning = false), 1400)
     }
   }
 
+  function stop() {
+    if (!sidecarReady) { isRunning = false; return }
+    void invoke('agent_request', { request: { type: 'abort', payload: { sessionId: 'main' } } }).finally(() => (isRunning = false))
+  }
+
   function handleKeydown(event: KeyboardEvent) {
-    if (event.key === 'Enter' && !event.shiftKey && !event.altKey) {
+    if (event.key === 'Enter' && !event.shiftKey) {
       event.preventDefault()
-      submit()
+      submit(event.altKey ? 'followUp' : 'steer')
     }
   }
 </script>
@@ -134,6 +147,9 @@
             {#if showThinking}
               <div class="thinking-detail"><div><i></i>分析 Percho 现有功能边界</div><div><i></i>规划 Tauri + Node sidecar 通信</div><div><i></i>整理三栏工作台信息层级</div></div>
             {/if}
+            {#if thinkingText}<div class="thinking-live"><span class="spinner"></span> {thinkingText}</div>{/if}
+            {#if toolActivity}<div class="tool-live"><span>◌</span> {toolActivity}</div>{/if}
+            {#if queuedMessages.length}<div class="queue-live">⌁ 已排队 {queuedMessages.length} 条消息（Alt+Enter）</div>{/if}
             <h2>第一版工作台结构</h2>
             <p>左侧管理项目和会话，中间负责与 Agent 工作，右侧用于查看文档、变更和运行结果。</p>
             <div class="feature-table"><div class="table-row table-head"><span>区域</span><span>职责</span><span>状态</span></div><div class="table-row"><span>会话栏</span><span>项目、Chats、Files</span><span class="muted">基础完成</span></div><div class="table-row"><span>Agent 区</span><span>思考、工具调用、插话</span><span class="blue">设计中</span></div><div class="table-row"><span>工作区</span><span>文档、Git、终端</span><span class="muted">待接入</span></div></div>
@@ -149,7 +165,7 @@
         <div class="composer-wrap">
           <div class="composer">
             <textarea bind:value={inputText} on:keydown={handleKeydown} placeholder="输入消息…  使用 @ 引用文件，/ 执行命令" rows="2"></textarea>
-            <div class="composer-toolbar"><div class="composer-left"><button>＋</button><button>⌘ GLM 5.2 <span>⌄</span></button><button>思考：高 <span>⌄</span></button></div><div class="composer-right"><span class="hint">Enter 发送 · Alt+Enter 排队</span><button class:stop={isRunning} class="send" on:click={submit}>{isRunning ? '停止' : '发送'} <span>{isRunning ? '■' : '↑'}</span></button></div></div>
+            <div class="composer-toolbar"><div class="composer-left"><button>＋</button><button>⌘ GLM 5.2 <span>⌄</span></button><button>思考：高 <span>⌄</span></button></div><div class="composer-right"><span class="hint">Enter 插话 · Alt+Enter 排队</span><button class:stop={isRunning} class="send" on:click={isRunning ? stop : () => submit('steer')}>{isRunning ? '停止' : '发送'} <span>{isRunning ? '■' : '↑'}</span></button></div></div>
           </div>
           <div class="composer-note">Pi Agent 可以读取和修改当前工作区中的文件</div>
         </div>
