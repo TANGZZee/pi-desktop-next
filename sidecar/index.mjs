@@ -6,12 +6,15 @@ import path from 'node:path'
 import { readdir, readFile, stat, writeFile } from 'node:fs/promises'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
+import { createRequire } from 'node:module'
 
 const sessions = new Map()
 let runtime
 let workspace = process.cwd()
 const agentDir = path.join(os.homedir(), '.pi', 'agent')
 const execFileAsync = promisify(execFile)
+const require = createRequire(import.meta.url)
+const sdkVersion = require('../package.json').dependencies['@earendil-works/pi-coding-agent']
 
 function send(message) {
   process.stdout.write(`${JSON.stringify(message)}\n`)
@@ -83,6 +86,29 @@ async function listFiles(cwd = workspace) {
   return output
 }
 
+async function readAuthProviders() {
+  try {
+    const raw = await readFile(path.join(agentDir, 'auth.json'), 'utf8')
+    const parsed = JSON.parse(raw)
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? Object.keys(parsed) : []
+  } catch {
+    return []
+  }
+}
+
+function openDirectory(target) {
+  const dir = path.resolve(target)
+  try {
+    if (process.platform === 'win32') {
+      execFile('explorer.exe', [dir]).on('error', () => {})
+    } else {
+      execFile(process.platform === 'darwin' ? 'open' : 'xdg-open', [dir]).on('error', () => {})
+    }
+  } catch {
+    // 打开目录失败时静默
+  }
+}
+
 async function readWorkspaceFile(cwd, file) {
   const root = path.resolve(cwd)
   const absolute = path.resolve(root, file)
@@ -126,6 +152,17 @@ async function handle(request) {
       workspace = payload.cwd || workspace
       await ensureRuntime()
       reply(id, { ready: true, cwd: workspace, agentDir })
+      return
+    }
+    if (type === 'info') {
+      reply(id, { node: process.version, sdk: sdkVersion, agentDir, sessionDir: path.join(agentDir, 'sessions'), authProviders: await readAuthProviders() })
+      return
+    }
+    if (type === 'open_dir') {
+      const target = String(payload.path ?? '')
+      if (!target) throw new Error('路径为空')
+      openDirectory(target)
+      reply(id, { ok: true })
       return
     }
     if (type === 'list_models') {
