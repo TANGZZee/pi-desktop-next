@@ -785,14 +785,8 @@
 <div class="desktop">
   <div class="window">
     <header class="titlebar">
-      <button class="panel-toggle" class:toggled={!showLeft} aria-label="切换左侧栏" on:click={() => (showLeft = !showLeft)}>
-        <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" aria-hidden="true"><rect x="1.5" y="2.5" width="13" height="11" rx="2.5"/><line x1="5.5" y1="2.5" x2="5.5" y2="13.5"/></svg>
-      </button>
       <div class="brand"><span class="brand-mark">π</span><span>Pi Agent</span></div>
       <div class="title-actions">
-        <button class="panel-toggle" class:toggled={!showRight} aria-label="切换右侧栏" on:click={() => (showRight = !showRight)}>
-          <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" aria-hidden="true"><rect x="1.5" y="2.5" width="13" height="11" rx="2.5"/><line x1="10.5" y1="2.5" x2="10.5" y2="13.5"/></svg>
-        </button>
         <span class="conn-chip" class:connected={sidecarReady}><i></i>{sidecarReady ? '已连接' : ''}</span>
       </div>
     </header>
@@ -800,7 +794,6 @@
     <div class="app-grid" style={`grid-template-columns:${showLeft ? 220 : 0}px minmax(430px, 1fr) ${showRight ? rightWidth : 0}px`}>
       <aside class="sidebar" class:collapsed={!showLeft}>
         <div class="sidebar-brand">
-          <span class="sidebar-brand-mark">π</span><strong>PiDeck</strong>
           <button class="sidebar-collapse" aria-label="收起左侧栏" on:click={() => (showLeft = false)}><svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" aria-hidden="true"><rect x="2" y="3" width="12" height="10" rx="1.8"/><line x1="5.5" y1="3" x2="5.5" y2="13"/></svg></button>
         </div>
 
@@ -933,7 +926,10 @@
       </main>
 
       <aside class="workspace" class:collapsed={!showRight}>
-        <div class="workspace-tabs">{#each ['文档', '变更', '终端', '运行'] as tab}<button class:active={panel === tab} on:click={() => (panel = tab as PanelTab)}>{tab}{#if tab === '变更' && gitChanges.length}<span class="badge">{gitChanges.length}</span>{/if}</button>{/each}</div>
+        <div class="workspace-tabs">
+          <button class="workspace-collapse" aria-label="切换右侧栏" on:click={() => (showRight = !showRight)}><svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" aria-hidden="true"><rect x="2" y="3" width="12" height="10" rx="1.8"/><line x1="10.5" y1="3" x2="10.5" y2="13"/></svg></button>
+          {#each ['文档', '变更', '终端', '运行'] as tab}<button class:active={panel === tab} on:click={() => (panel = tab as PanelTab)}>{tab}{#if tab === '变更' && gitChanges.length}<span class="badge">{gitChanges.length}</span>{/if}</button>{/each}
+        </div>
         {#if panel === '文档'}
           <div class="document-toolbar">
             {#if selectedFile}

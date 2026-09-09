@@ -119,6 +119,8 @@ button { border: 0; cursor: pointer; color: inherit; }
 .sidebar-brand strong { font:600 11px/1 Inter,sans-serif; letter-spacing:.08em; text-transform:uppercase; }
 .sidebar-collapse { display:grid; place-items:center; width:22px; height:22px; margin-left:auto; border-radius:5px; background:transparent; color:#777; }
 .sidebar-collapse:hover { background:#e9e9e9; }
+.workspace-collapse { display:grid !important; place-items:center; flex:none; width:24px; height:24px; margin:9px 5px 0 0; padding:0 !important; border-radius:5px; background:transparent !important; color:#777 !important; }
+.workspace-collapse:hover { background:#e9e9e9 !important; }
 .sidebar-actions { display:flex; flex-direction:column; gap:2px; margin-top:11px; }
 .sidebar-action { display:flex; align-items:center; gap:7px; width:100%; height:26px; padding:0 2px; background:transparent; color:#555; font-size:10px; text-align:left; }
 .sidebar-action svg { color:#777; }
