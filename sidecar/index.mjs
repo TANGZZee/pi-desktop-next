@@ -199,6 +199,15 @@ async function handle(request) {
       reply(id, await openSession(payload.sessionId || payload.file, payload.file))
       return
     }
+    if (type === 'rename_session') {
+      const entry = sessions.get(payload.sessionId)
+      if (!entry) throw new Error(`会话不存在: ${payload.sessionId}`)
+      const name = String(payload.name ?? '').trim()
+      if (!name) throw new Error('会话名称不能为空')
+      entry.session.sessionManager.appendSessionInfo(name)
+      reply(id, { sessionId: payload.sessionId, name })
+      return
+    }
     if (type === 'set_model') {
       const entry = sessions.get(payload.sessionId)
       if (!entry) throw new Error(`会话不存在: ${payload.sessionId}`)

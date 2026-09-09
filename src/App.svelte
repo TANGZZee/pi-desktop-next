@@ -10,17 +10,13 @@
   type ModelInfo = { provider: string; id: string; name: string; reasoning: boolean }
   type GitChange = { code: string; path: string }
   type SidecarResponse = { type: 'response'; id: number; ok: boolean; result: unknown; error?: string }
-  type RunSlot = { reply: string; thinking: string; tool: string; running: boolean; queue: string[]; sent: string[] }
+  type SentMessage = { text: string; at: string }
+  type RunSlot = { reply: string; thinking: string; tool: string; running: boolean; queue: string[]; sent: SentMessage[] }
 
-  let sessions: Session[] = [
-    { id: 'main', title: '设计 pi-agent 桌面端', time: '刚刚', state: 'active' },
-    { id: 'memory', title: '优化 Percho 内存占用', time: '昨天', state: 'done' },
-    { id: 'sidecar', title: '研究 Tauri sidecar 架构', time: '周一' },
-    { id: 'git', title: '添加 Git 工作台', time: '上周' }
-  ]
+  let sessions: Session[] = [{ id: 'main', title: '新会话', time: '刚刚' }]
 
-  let activeSession = sessions[0].title
-  let activeSessionId = sessions[0].id
+  let activeSession = '新会话'
+  let activeSessionId = 'main'
   let panel: PanelTab = '文档'
   let leftTab: 'Chats' | 'Files' = 'Chats'
   let workspacePath = '.'
@@ -34,11 +30,11 @@
   let commitMessage = ''
   let gitError = ''
   let inputText = ''
-  let showThinking = false
+  let query = ''
   let runState: Record<string, RunSlot> = {}
   let sidecarReady = false
-  let modelCount = 0
   let models: ModelInfo[] = []
+  let composerInput: HTMLTextAreaElement
   // 与 SDK 保持一致：THINKING_LEVEL_OPTIONS / DEFAULT_THINKING_LEVEL
   const MODEL_SEPARATOR = '\u0000'
   const THINKING_LEVELS = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']
@@ -46,6 +42,9 @@
   const DEFAULT_THINKING = 'medium'
   const pending = new Map<number, (value: SidecarResponse) => void>()
   let requestSequence = 0
+
+  $: filteredSessions = sessions.filter((item) => item.title.toLowerCase().includes(query.toLowerCase()))
+  $: filteredFiles = files.filter((item) => item.path.toLowerCase().includes(query.toLowerCase()))
 
   function emptySlot(): RunSlot {
     return { reply: '', thinking: '', tool: '', running: false, queue: [], sent: [] }
@@ -92,6 +91,39 @@
 
   function thinkingChoice(records: Session[], id: string) {
     return records.find((item) => item.id === id)?.thinking ?? DEFAULT_THINKING
+  }
+
+  function workspaceBase() {
+    if (workspacePath === '.') return '当前目录'
+    return workspacePath.split(/[\\/]/).pop() || workspacePath
+  }
+
+  function workspaceLabel() {
+    return workspacePath === '.' ? '选择工作区' : workspaceBase()
+  }
+
+  function statusText() {
+    if (!sidecarReady) return '未连接'
+    const running = Object.values(runState).filter((slot) => slot.running).length
+    return running > 0 ? `运行中 · ${running} 个会话` : '就绪'
+  }
+
+  function statusDotTitle(session: Session) {
+    if (session.state === 'active') return '运行中'
+    if (session.state === 'done') return '已完成'
+    return '空闲'
+  }
+
+  function isIdle(id: string) {
+    const slot = slotFor(id)
+    return !slot.sent.length && !slot.reply && !slot.running
+  }
+
+  function documentStats() {
+    if (!selectedFile) return ''
+    const lines = fileContent ? fileContent.split('\n').length : 0
+    const kb = Math.max(1, Math.ceil(new TextEncoder().encode(fileContent).length / 1024))
+    return `${lines} 行 · ${kb} KB`
   }
 
   async function chooseModel(event: Event) {
@@ -154,7 +186,6 @@
       await request('init', { cwd: '.' })
       sidecarReady = true
       models = (await request('list_models') as ModelInfo[]) ?? []
-      modelCount = models.length
       await loadFiles()
       await refreshGit()
       const loaded = await request('list_sessions', { cwd: '.' }) as Array<{ id: string; title: string; file: string; modifiedAt: number }>
@@ -259,14 +290,25 @@
     if (sidecarReady && session.file) await request('open_session', { sessionId: session.id, file: session.file })
   }
 
+  // 首次发送时用文本前 20 字自动命名「新会话」；返回新标题用于持久化。
+  function maybeAutoTitle(id: string, text: string) {
+    const session = sessions.find((item) => item.id === id)
+    if (!session || (session.title && session.title !== '新会话')) return null
+    const title = text.length > 20 ? `${text.slice(0, 20)}…` : text
+    sessions = sessions.map((item) => (item.id === id ? { ...item, title } : item))
+    if (activeSessionId === id) activeSession = title
+    return title
+  }
+
   function submit(behavior: 'steer' | 'followUp' = 'steer') {
     const text = inputText.trim()
     if (!text) return
     const id = activeSessionId
     const slot = slotFor(id)
     inputText = ''
+    const newTitle = maybeAutoTitle(id, text)
     patchSlot(id, {
-      sent: [...slot.sent, text],
+      sent: [...slot.sent, { text, at: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) }],
       reply: '',
       thinking: '',
       running: true,
@@ -274,6 +316,7 @@
     })
     if (sidecarReady) {
       void request('prompt', { sessionId: id, text, cwd: '.', behavior })
+        .then(() => { if (newTitle) void request('rename_session', { sessionId: id, name: newTitle }) })
         .catch(() => patchSlot(id, { running: false }))
     } else {
       window.setTimeout(() => patchSlot(id, { running: false }), 1400)
@@ -284,6 +327,11 @@
     const id = activeSessionId
     if (!sidecarReady) { patchSlot(id, { running: false }); return }
     void request('abort', { sessionId: id }).finally(() => patchSlot(id, { running: false }))
+  }
+
+  function quickPrompt(text: string) {
+    inputText = text
+    composerInput?.focus()
   }
 
   function handleKeydown(event: KeyboardEvent) {
@@ -301,14 +349,10 @@
 <div class="desktop">
   <div class="window">
     <header class="titlebar">
-      <div class="traffic-lights" aria-label="窗口控制">
-        <span class="light close"></span><span class="light minimize"></span><span class="light maximize"></span>
-      </div>
       <div class="brand"><span class="brand-mark">π</span><span>Pi Agent</span></div>
       <div class="title-actions">
-        <button class="workspace-button" on:click={chooseWorkspace}><span class="folder-icon">⌂</span> {workspacePath === '.' ? '选择工作区' : workspacePath.split(/[\\/]/).pop()} <span class="chevron">⌄</span></button>
-        <button class="icon-button" aria-label="搜索">⌕</button>
-        <button class="icon-button" aria-label="设置">⚙</button>
+        <button class="workspace-button" title={workspacePath} on:click={chooseWorkspace}><span class="folder-icon">⌂</span> {workspaceLabel()} <span class="chevron">⌄</span></button>
+        <span class="conn-chip" class:connected={sidecarReady}><i></i>{sidecarReady ? '已连接' : '未连接'}</span>
       </div>
     </header>
 
@@ -316,104 +360,114 @@
       <aside class="sidebar">
         <div class="sidebar-head">
           <button class="new-button" on:click={async () => {
-            if (!sidecarReady) { activeSession = '新会话'; activeSessionId = `draft-${Date.now()}`; return }
+            if (!sidecarReady) {
+              const draftId = `draft-${Date.now()}`
+              activeSession = '新会话'
+              activeSessionId = draftId
+              sessions = [{ id: draftId, title: '新会话', time: '刚刚' }, ...sessions]
+              return
+            }
             const id = `session-${Date.now()}`
             const created = await request('create_session', { sessionId: id, cwd: '.' }) as { id: string }
             activeSessionId = created.id
             activeSession = '新会话'
             sessions = [{ id: created.id, title: '新会话', time: '刚刚', state: 'active' }, ...sessions]
           }}><span>＋</span> 新建会话</button>
-          <button class="small-icon" aria-label="更多">•••</button>
-        </div>
-
-        <div class="project-card">
-          <div class="project-icon">⌘</div>
-          <div><strong>日常工作区</strong><small>~/Projects</small></div>
-          <span class="chevron">⌄</span>
         </div>
 
         <div class="segmented">
           <button class:selected={leftTab === 'Chats'} on:click={() => (leftTab = 'Chats')}>Chats</button><button class:selected={leftTab === 'Files'} on:click={() => { leftTab = 'Files'; void loadFiles() }}>Files</button>
         </div>
+
+        <label class="search"><span>⌕</span><input placeholder={leftTab === 'Chats' ? '搜索会话' : '搜索文件'} bind:value={query} /></label>
+
         {#if leftTab === 'Chats'}
-
-        <label class="search"><span>⌕</span><input placeholder="搜索会话" /></label>
-
-        <div class="session-heading"><span>会话</span><button aria-label="排序">⇅</button></div>
-        <div class="sessions">
-          {#each sessions as session}
-            <button class:current={activeSessionId === session.id} class="session" on:click={() => void selectSession(session)}>
-              <span class:live={session.state === 'active'} class:complete={session.state === 'done'} class="status-dot"></span>
-              <span class="session-copy"><strong>{session.title}</strong><small>{session.time}</small></span>
-              {#if activeSessionId === session.id}<span class="more">•••</span>{/if}
-            </button>
-          {/each}
-        </div>
-        {:else}
-          <div class="file-list">
-            {#each files as file}
-              <button class:file-folder={file.kind === 'directory'} on:click={() => file.kind === 'file' && void previewFile(file.path)}><span>{file.kind === 'directory' ? '▸' : '·'}</span>{file.path}</button>
+          <div class="session-heading"><span>会话</span><span class="session-count">{filteredSessions.length}</span></div>
+          <div class="sessions">
+            {#each filteredSessions as session}
+              <button class:current={activeSessionId === session.id} class="session" on:click={() => void selectSession(session)}>
+                <span class:live={session.state === 'active'} class:complete={session.state === 'done'} class="status-dot" title={statusDotTitle(session)}></span>
+                <span class="session-copy"><strong>{session.title}</strong><small>{session.time}</small></span>
+              </button>
             {:else}
-              <div class="file-empty">选择项目目录后显示文件</div>
+              <div class="file-empty">没有匹配的会话</div>
             {/each}
           </div>
+        {:else}
+          <div class="file-list">
+            {#if filteredFiles.length}
+              {#each filteredFiles as file}
+                <button class:file-folder={file.kind === 'directory'} on:click={() => file.kind === 'file' && void previewFile(file.path)}><span>{file.kind === 'directory' ? '▸' : '·'}</span>{file.path}</button>
+              {/each}
+            {:else if files.length}
+              <div class="file-empty">没有匹配的文件</div>
+            {:else}
+              <div class="file-empty">选择项目目录后显示文件</div>
+            {/if}
+          </div>
         {/if}
-
-        <div class="sidebar-bottom">
-          <button><span>◈</span> 模型 <small>GLM 5.2</small></button>
-          <button><span>✧</span> Skills <small>已加载 8</small></button>
-          <button><span>◌</span> Plugins <small>管理</small></button>
-        </div>
       </aside>
 
       <main class="chat">
         <div class="chat-header">
-          <div><h1>{activeSession}</h1><p><span class="online-dot"></span> Pi Agent · 日常工作区</p></div>
-          <div class="chat-header-actions"><button>历史记录</button><button>分支</button><button>•••</button></div>
+          <div><h1>{activeSession}</h1><p><span class="online-dot" class:offline={!sidecarReady}></span> Pi Agent · {workspaceBase()}</p></div>
         </div>
 
-        <div class="messages">
-          <div class="message user-message"><div class="user-bubble">我想做一个自己的 Pi Agent 桌面端，界面要高级、简约，像 macOS。</div><time>14:08</time></div>
-          <div class="message assistant-message">
-            <div class="message-meta"><span class="assistant-avatar">π</span><strong>Pi Agent</strong><span>GLM 5.2</span></div>
-            <p>明白。我会以 Percho 的 Agent 能力为基础，吸收 pi-desktop 和 Zosma Cowork 的优点，重新组织成一个更轻量的桌面工作台。</p>
-            <button class="process" on:click={() => (showThinking = !showThinking)}><span>{showThinking ? '⌄' : '›'}</span> Process details <em>· 4 个步骤</em></button>
-            {#if showThinking}
-              <div class="thinking-detail"><div><i></i>分析 Percho 现有功能边界</div><div><i></i>规划 Tauri + Node sidecar 通信</div><div><i></i>整理三栏工作台信息层级</div></div>
-            {/if}
+        <div class="messages" class:centered={isIdle(activeSessionId)}>
+          {#if isIdle(activeSessionId)}
+            <div class="empty-state">
+              <div class="empty-mark">π</div>
+              <h2>向 Pi Agent 描述任务</h2>
+              <p>Enter 发送并插话 · Alt+Enter 排队 · 运行中可随时停止</p>
+              <div class="quick-chips">
+                <button on:click={() => quickPrompt('请分析当前项目的目录结构，梳理主要模块、入口文件和各部分职责，并给出简要说明。')}>分析当前项目结构</button>
+                <button on:click={() => quickPrompt('请检查当前工作区的 Git 变更，总结改动内容、涉及的文件以及可能的风险点。')}>检查工作区变更</button>
+                <button on:click={() => quickPrompt('请阅读并总结当前项目 README 的内容，提炼出项目定位、安装方式和核心用法。')}>总结 README</button>
+              </div>
+            </div>
+          {:else}
+            {#each runState[activeSessionId]?.sent ?? [] as message}
+              <div class="message user-message"><div class="user-bubble">{message.text}</div><time>{message.at}</time></div>
+            {/each}
             {#if runState[activeSessionId]?.thinking}<div class="thinking-live"><span class="spinner"></span> {runState[activeSessionId]?.thinking}</div>{/if}
             {#if runState[activeSessionId]?.tool}<div class="tool-live"><span>◌</span> {runState[activeSessionId]?.tool}</div>{/if}
             {#if (runState[activeSessionId]?.queue ?? []).length}<div class="queue-live">⌁ 已排队 {(runState[activeSessionId]?.queue ?? []).length} 条消息（Alt+Enter）</div>{/if}
-            <h2>第一版工作台结构</h2>
-            <p>左侧管理项目和会话，中间负责与 Agent 工作，右侧用于查看文档、变更和运行结果。</p>
-            <div class="feature-table"><div class="table-row table-head"><span>区域</span><span>职责</span><span>状态</span></div><div class="table-row"><span>会话栏</span><span>项目、Chats、Files</span><span class="muted">基础完成</span></div><div class="table-row"><span>Agent 区</span><span>思考、工具调用、插话</span><span class="blue">设计中</span></div><div class="table-row"><span>工作区</span><span>文档、Git、终端</span><span class="muted">待接入</span></div></div>
-            <div class="tool-summary"><span class="tool-icon">✓</span><div><strong>已读取项目需求</strong><small>Percho · pi-desktop · Zosma Cowork</small></div><span class="tool-time">1.8s</span></div>
-          </div>
-          {#each runState[activeSessionId]?.sent ?? [] as message}
-            <div class="message user-message"><div class="user-bubble">{message}</div><time>刚刚</time></div>
-          {/each}
-          {#if runState[activeSessionId]?.reply}<div class="message assistant-message"><div class="message-meta"><span class="assistant-avatar">π</span><strong>Pi Agent</strong><span>实时回复</span></div><p>{runState[activeSessionId]?.reply}</p></div>{/if}
-          {#if runState[activeSessionId]?.running}<div class="running-line"><span class="spinner"></span> Agent 正在处理…</div>{/if}
+            {#if runState[activeSessionId]?.reply}<div class="message assistant-message"><div class="message-meta"><span class="assistant-avatar">π</span><strong>Pi Agent</strong><span>实时回复</span></div><p>{runState[activeSessionId]?.reply}</p></div>{/if}
+            {#if runState[activeSessionId]?.running}<div class="running-line"><span class="spinner"></span> Agent 正在处理…</div>{/if}
+          {/if}
         </div>
 
         <div class="composer-wrap">
           <div class="composer">
-            <textarea bind:value={inputText} on:keydown={handleKeydown} placeholder="输入消息…  使用 @ 引用文件，/ 执行命令" rows="2"></textarea>
-            <div class="composer-toolbar"><div class="composer-left"><button>＋</button><select class="picker" aria-label="模型" disabled={!models.length} value={modelChoice(models, sessions, activeSessionId)} on:change={chooseModel}>{#each modelGroups(models) as group (group.provider)}<optgroup label={group.provider}>{#each group.items as model (modelKey(model))}<option value={modelKey(model)}>{model.name}</option>{/each}</optgroup>{/each}</select><select class="picker" aria-label="思考档位" disabled={!sidecarReady} value={thinkingChoice(sessions, activeSessionId)} on:change={chooseThinking}>{#each THINKING_LEVELS as level (level)}<option value={level}>思考：{THINKING_LABELS[level] ?? level}</option>{/each}</select></div><div class="composer-right"><span class="hint">Enter 插话 · Alt+Enter 排队</span><button class:stop={runState[activeSessionId]?.running} class="send" on:click={runState[activeSessionId]?.running ? stop : () => submit('steer')}>{runState[activeSessionId]?.running ? '停止' : '发送'} <span>{runState[activeSessionId]?.running ? '■' : '↑'}</span></button></div></div>
+            <textarea bind:this={composerInput} bind:value={inputText} on:keydown={handleKeydown} placeholder="输入消息…" rows="2"></textarea>
+            <div class="composer-toolbar"><div class="composer-left"><select class="picker" aria-label="模型" disabled={!models.length} value={modelChoice(models, sessions, activeSessionId)} on:change={chooseModel}>{#each modelGroups(models) as group (group.provider)}<optgroup label={group.provider}>{#each group.items as model (modelKey(model))}<option value={modelKey(model)}>{model.name}</option>{/each}</optgroup>{/each}</select><select class="picker" aria-label="思考档位" disabled={!sidecarReady} value={thinkingChoice(sessions, activeSessionId)} on:change={chooseThinking}>{#each THINKING_LEVELS as level (level)}<option value={level}>思考：{THINKING_LABELS[level] ?? level}</option>{/each}</select></div><div class="composer-right"><span class="hint">Enter 插话 · Alt+Enter 排队</span><button class:stop={runState[activeSessionId]?.running} class="send" on:click={runState[activeSessionId]?.running ? stop : () => submit('steer')}>{runState[activeSessionId]?.running ? '停止' : '发送'} <span>{runState[activeSessionId]?.running ? '■' : '↑'}</span></button></div></div>
           </div>
           <div class="composer-note">Pi Agent 可以读取和修改当前工作区中的文件</div>
         </div>
       </main>
 
       <aside class="workspace">
-        <div class="workspace-tabs">{#each ['文档', '变更', '终端', '运行'] as tab}<button class:active={panel === tab} on:click={() => (panel = tab as PanelTab)}>{tab}{#if tab === '变更'}<span class="badge">3</span>{/if}</button>{/each}</div>
+        <div class="workspace-tabs">{#each ['文档', '变更', '终端', '运行'] as tab}<button class:active={panel === tab} on:click={() => (panel = tab as PanelTab)}>{tab}{#if tab === '变更' && gitChanges.length}<span class="badge">{gitChanges.length}</span>{/if}</button>{/each}</div>
         {#if panel === '文档'}
-          <div class="document-toolbar"><span>Markdown · 278 行</span><span class="live-label"><i></i> Live</span><button>Source</button><button class="preview">Preview</button></div>
-          {#if selectedFile}
-            <article class="document"><div class="eyebrow">FILE PREVIEW</div><h2>{selectedFile}</h2><div class="document-file-actions"><span>{editingFile ? '编辑文件' : '只读预览'}</span><div>{#if !editingFile}<button on:click={() => (editingFile = true)}>编辑</button>{:else}<button on:click={() => void saveFile()}>保存</button><button on:click={() => (editingFile = false)}>取消</button>{/if}</div></div>{#if editingFile}<textarea class="file-editor" bind:value={fileContent}></textarea>{:else}<pre class="file-preview">{fileContent}</pre>{/if}</article>
-          {:else}
-            <article class="document"><div class="eyebrow">PI AGENT 工作方案</div><h2>轻量化桌面 Agent<br />工作台</h2><p class="lead">基于 Percho 能力重构的个人 Pi Agent 桌面端，使用更轻量的 Tauri 壳和清晰的工作区布局。</p><div class="callout"><strong>设计原则</strong><p>让 Agent 的工作过程透明，让工作结果始终可审阅。</p></div><h3>一、核心定位</h3><p>它不是传统 IDE，也不是普通聊天软件，而是一个围绕 Agent 工作流设计的桌面应用。</p><h3>二、功能分区</h3><div class="mini-list"><div><b>01</b><span><strong>会话</strong><small>多项目、多会话、持久化历史</small></span></div><div><b>02</b><span><strong>过程</strong><small>Thinking、工具调用、插话与排队</small></span></div><div><b>03</b><span><strong>结果</strong><small>文档、Diff、终端与运行任务</small></span></div></div></article>
-          {/if}
+          <div class="document-toolbar">
+            {#if selectedFile}
+              <span class="doc-name">{selectedFile}</span><span class="doc-stats">{documentStats()}</span>
+            {:else}
+              <span class="doc-name doc-empty-label">未选择文件</span>
+            {/if}
+            {#if selectedFile}
+              <span class="doc-actions">
+                {#if !editingFile}<button on:click={() => (editingFile = true)}>编辑</button>{:else}<button on:click={() => void saveFile()}>保存</button><button on:click={() => (editingFile = false)}>取消</button>{/if}
+              </span>
+            {/if}
+          </div>
+          <article class="document">
+            {#if selectedFile}
+              {#if editingFile}<textarea class="file-editor" bind:value={fileContent}></textarea>{:else}<pre class="file-preview">{fileContent}</pre>{/if}
+            {:else}
+              <div class="doc-empty">从左侧文件列表选择文件以预览</div>
+            {/if}
+          </article>
         {:else if panel === '变更'}
           <div class="git-panel">
             <div class="panel-content">
@@ -448,6 +502,6 @@
         {/if}
       </aside>
     </div>
-    <footer class="statusbar"><span>⌘ 日常工作区</span><span>Ready</span><span>本地会话 · 自动保存</span></footer>
+    <footer class="statusbar"><span title={workspacePath}>{workspaceBase()}</span><span>{statusText()}</span><span>{sessions.length} 个会话 · 保存至 ~/.pi/agent/sessions</span></footer>
   </div>
 </div>
