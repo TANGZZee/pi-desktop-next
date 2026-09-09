@@ -3,6 +3,7 @@
   import { invoke } from '@tauri-apps/api/core'
   import { listen } from '@tauri-apps/api/event'
   import { open, confirm } from '@tauri-apps/plugin-dialog'
+  import { getVersion } from '@tauri-apps/api/app'
   import Terminal from './Terminal.svelte'
 
   type PanelTab = '文档' | '变更' | '终端' | '运行'
@@ -19,6 +20,9 @@
   let activeSessionId = 'main'
   let panel: PanelTab = '文档'
   let leftTab: 'Chats' | 'Files' = 'Chats'
+  let showLeft = true
+  let showRight = true
+  let showSettings = false // TODO(后续切片): showSettings 为 true 时渲染设置模态
   let workspacePath = '.'
   let files: Array<{ path: string; kind: 'file' | 'directory' }> = []
   let selectedFile = ''
@@ -35,6 +39,7 @@
   let sidecarReady = false
   let models: ModelInfo[] = []
   let composerInput: HTMLTextAreaElement
+  let appVersion = '0.0.0'
   // 与 SDK 保持一致：THINKING_LEVEL_OPTIONS / DEFAULT_THINKING_LEVEL
   const MODEL_SEPARATOR = '\u0000'
   const THINKING_LEVELS = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']
@@ -160,6 +165,11 @@
   }
 
   onMount(async () => {
+    try {
+      appVersion = await getVersion()
+    } catch {
+      appVersion = '0.0.0'
+    }
     const unlisten = await listen<AgentEnvelope>('agent-message', ({ payload }) => {
       if (payload.type === 'response' && payload.id) {
         pending.get(payload.id)?.(payload)
@@ -349,15 +359,20 @@
 <div class="desktop">
   <div class="window">
     <header class="titlebar">
+      <button class="panel-toggle" class:toggled={!showLeft} aria-label="切换左侧栏" on:click={() => (showLeft = !showLeft)}>
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" aria-hidden="true"><rect x="1.5" y="2.5" width="13" height="11" rx="2.5"/><line x1="5.5" y1="2.5" x2="5.5" y2="13.5"/></svg>
+      </button>
       <div class="brand"><span class="brand-mark">π</span><span>Pi Agent</span></div>
       <div class="title-actions">
-        <button class="workspace-button" title={workspacePath} on:click={chooseWorkspace}><span class="folder-icon">⌂</span> {workspaceLabel()} <span class="chevron">⌄</span></button>
+        <button class="panel-toggle" class:toggled={!showRight} aria-label="切换右侧栏" on:click={() => (showRight = !showRight)}>
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" aria-hidden="true"><rect x="1.5" y="2.5" width="13" height="11" rx="2.5"/><line x1="10.5" y1="2.5" x2="10.5" y2="13.5"/></svg>
+        </button>
         <span class="conn-chip" class:connected={sidecarReady}><i></i>{sidecarReady ? '已连接' : '未连接'}</span>
       </div>
     </header>
 
-    <div class="app-grid">
-      <aside class="sidebar">
+    <div class="app-grid" class:left-hidden={!showLeft} class:right-hidden={!showRight}>
+      <aside class="sidebar" class:hidden={!showLeft}>
         <div class="sidebar-head">
           <button class="new-button" on:click={async () => {
             if (!sidecarReady) {
@@ -373,6 +388,10 @@
             activeSession = '新会话'
             sessions = [{ id: created.id, title: '新会话', time: '刚刚', state: 'active' }, ...sessions]
           }}><span>＋</span> 新建会话</button>
+          <button class="workspace-button" title={workspacePath} on:click={chooseWorkspace}>
+            <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round" aria-hidden="true"><path d="M1.5 4A1.5 1.5 0 0 1 3 2.5h3l2 2h5A1.5 1.5 0 0 1 14.5 6v6.5A1.5 1.5 0 0 1 13 14H3A1.5 1.5 0 0 1 1.5 12.5V4Z"/></svg>
+            <span class="workspace-label">{workspaceLabel()}</span>
+          </button>
         </div>
 
         <div class="segmented">
@@ -406,6 +425,13 @@
             {/if}
           </div>
         {/if}
+
+        <div class="sidebar-footer">
+          <button class="icon-button" aria-label="设置" on:click={() => (showSettings = true)}>
+            <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" aria-hidden="true"><circle cx="8" cy="8" r="2.4"/><path d="M8 1.7v2M8 12.3v2M14.3 8h-2M3.7 8h-2M12.5 3.5l-1.4 1.4M4.9 11.1l-1.4 1.4M12.5 12.5l-1.4-1.4M4.9 4.9 3.5 3.5"/></svg>
+          </button>
+          <span class="version">v{appVersion}</span>
+        </div>
       </aside>
 
       <main class="chat">
@@ -446,7 +472,7 @@
         </div>
       </main>
 
-      <aside class="workspace">
+      <aside class="workspace" class:hidden={!showRight}>
         <div class="workspace-tabs">{#each ['文档', '变更', '终端', '运行'] as tab}<button class:active={panel === tab} on:click={() => (panel = tab as PanelTab)}>{tab}{#if tab === '变更' && gitChanges.length}<span class="badge">{gitChanges.length}</span>{/if}</button>{/each}</div>
         {#if panel === '文档'}
           <div class="document-toolbar">
