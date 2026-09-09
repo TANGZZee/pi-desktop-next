@@ -113,7 +113,7 @@
               <h3>运行时与连接</h3>
               <div class="row">
                 <span class="k">Sidecar</span>
-                <span class="chip" class:on={connected}><i></i>{connected ? '已连接' : '未连接'}</span>
+                <span class="chip" class:on={connected}><i></i>{connected ? '已连接' : ''}</span>
               </div>
               <div class="row">
                 <span class="k">当前工作区</span>
