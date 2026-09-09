@@ -266,6 +266,26 @@ async function usageStats(cwd = workspace) {
   }
 }
 
+async function generateImage(payload) {
+  const baseUrl = String(payload.baseUrl || '').trim().replace(/\/+$/, '')
+  const apiKey = String(payload.apiKey || '').trim()
+  const model = String(payload.model || '').trim()
+  const prompt = String(payload.prompt || '').trim()
+  if (!/^https?:\/\//i.test(baseUrl) || !apiKey || !model || !prompt || prompt.length > 4000) throw new Error('生图配置或提示词无效')
+  const response = await fetch(`${baseUrl}/images/generations`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
+    body: JSON.stringify({ model, prompt, n: 1, size: payload.size || '1024x1024', response_format: 'b64_json' }),
+    signal: AbortSignal.timeout(180000),
+  })
+  if (!response.ok) throw new Error(`生图请求失败：HTTP ${response.status}`)
+  const result = await response.json()
+  const item = result?.data?.[0] || result?.images?.[0]
+  if (item?.b64_json) return { data: item.b64_json, mimeType: 'image/png' }
+  if (item?.url) return { url: item.url, mimeType: 'image/png' }
+  throw new Error('生图服务未返回图片')
+}
+
 async function readWorkspaceFile(cwd, file) {  const root = path.resolve(cwd)
   const absolute = path.resolve(root, file)
   if (absolute !== root && !absolute.startsWith(`${root}${path.sep}`)) throw new Error('禁止读取工作区外的文件')
@@ -434,6 +454,10 @@ async function handle(request) {
     }
     if (type === 'usage_stats') {
       reply(id, await usageStats(payload.cwd || workspace))
+      return
+    }
+    if (type === 'generate_image') {
+      reply(id, await generateImage(payload))
       return
     }
     if (type === 'open_session') {

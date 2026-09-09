@@ -4,6 +4,7 @@
 
   type ProviderInfo = { provider: string; modelCount: number; configured: boolean }
   type UsageStats = { sessions: number; turns: number; activeDays: number; totals: { input: number; output: number; cacheRead: number; cacheWrite: number; total: number }; costUsd: number; costKnown: boolean; byModel: Array<{ model: string; tokens: number; turns: number }> }
+  type ImageGenConfig = { baseUrl: string; apiKey: string; model: string; size: string }
   type SettingsInfo = { node: string; sdk: string; agentDir: string; sessionDir: string; authProviders: string[]; providers?: ProviderInfo[] }
 
   export let open = false
@@ -16,14 +17,17 @@
   export let onOpenRepo: (() => void) | undefined = undefined
   export let providers: ProviderInfo[] | undefined = undefined
   export let usageStats: UsageStats | null = null
+  export let imageGenConfig: ImageGenConfig = { baseUrl: '', apiKey: '', model: '', size: '1024x1024' }
+  export let onSaveImageGenConfig: (config: ImageGenConfig) => void = () => {}
   export let onRefreshProviders: (() => void) | undefined = undefined
   export let onRefreshUsage: (() => void) | undefined = undefined
 
-  type Tab = 'general' | 'models' | 'usage' | 'about'
+  type Tab = 'general' | 'models' | 'usage' | 'imagegen' | 'about'
   const TABS: Array<[Tab, string]> = [
     ['general', '通用'],
     ['models', '模型'],
     ['usage', '用量'],
+    ['imagegen', '生图'],
     ['about', '关于']
   ]
 
@@ -90,6 +94,10 @@
     if (value >= 1000000) return `${(value / 1000000).toFixed(1)}M`
     if (value >= 1000) return `${(value / 1000).toFixed(1)}K`
     return String(Math.round(value))
+  }
+
+  function updateImageGen(key: keyof ImageGenConfig, value: string) {
+    onSaveImageGenConfig({ ...imageGenConfig, [key]: value })
   }
 
   function workspaceBase() {
@@ -161,6 +169,15 @@
                 {/each}
               </div>
               <p class="desc">新建终端时使用的默认 shell。</p>
+            </section>
+          {:else if tab === 'imagegen'}
+            <section class="group">
+              <h3>生图配置</h3>
+              <p class="desc imagegen-note">仅支持 OpenAI 兼容的图片生成接口。密钥保存在本机浏览器存储中。</p>
+              <label class="field-row"><span>接口地址</span><input value={imageGenConfig.baseUrl} on:input={(event) => updateImageGen('baseUrl', (event.currentTarget as HTMLInputElement).value)} placeholder="https://api.example.com/v1" /></label>
+              <label class="field-row"><span>API Key</span><input type="password" value={imageGenConfig.apiKey} on:input={(event) => updateImageGen('apiKey', (event.currentTarget as HTMLInputElement).value)} placeholder="sk-…" /></label>
+              <label class="field-row"><span>模型名称</span><input value={imageGenConfig.model} on:input={(event) => updateImageGen('model', (event.currentTarget as HTMLInputElement).value)} placeholder="dall-e-3" /></label>
+              <label class="field-row"><span>图片尺寸</span><select value={imageGenConfig.size} on:change={(event) => updateImageGen('size', (event.currentTarget as HTMLSelectElement).value)}><option value="1024x1024">1024 × 1024</option><option value="1536x1024">1536 × 1024</option><option value="1024x1536">1024 × 1536</option></select></label>
             </section>
           {:else if tab === 'usage'}
             <section class="group usage-group">
@@ -287,7 +304,10 @@
   .hint-line { flex:1; margin:0; color:#a0a5a0; font-size:10px; }
   .ghost { flex:none; padding:5px 10px; border-radius:6px; background:#eef1ed; color:#596659; font-size:9px; }
   .ghost:hover { background:#e2e7e1; }
-  .usage-group .section-head { align-items:flex-start; }
+  .field-row { display:grid; grid-template-columns:72px minmax(0,1fr); align-items:center; gap:9px; margin-top:9px; color:#777f77; font-size:10px; }
+  .field-row input, .field-row select { min-width:0; width:100%; padding:7px 8px; border:1px solid #dfe3df; border-radius:6px; outline:0; background:#fff; color:#4c534c; font-size:10px; }
+  .field-row input:focus, .field-row select:focus { border-color:#aeb7ad; }
+  .imagegen-note { margin-top:-4px; }
   .usage-group .section-head h3 { margin-bottom:3px; }
   .usage-group .section-head .desc { margin:0; }
   .usage-cards { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:8px; margin-top:14px; }
