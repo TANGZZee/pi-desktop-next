@@ -397,6 +397,13 @@ async function handle(request) {
       reply(id, { sessionId: payload.sessionId, name })
       return
     }
+    if (type === 'export_session') {
+      const entry = sessions.get(payload.sessionId)
+      const file = entry?.file || String(payload.file || '')
+      if (!file) throw new Error('会话文件不存在')
+      reply(id, { name: path.basename(file), content: await readFile(file, 'utf8') })
+      return
+    }
     if (type === 'set_model') {
       const entry = sessions.get(payload.sessionId)
       if (!entry) throw new Error(`会话不存在: ${payload.sessionId}`)
