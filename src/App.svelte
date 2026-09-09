@@ -793,10 +793,6 @@
 
     <div class="app-grid" style={`grid-template-columns:${showLeft ? 220 : 0}px minmax(430px, 1fr) ${showRight ? rightWidth : 0}px`}>
       <aside class="sidebar" class:collapsed={!showLeft}>
-        <div class="sidebar-brand">
-          <button class="sidebar-collapse" aria-label="收起左侧栏" on:click={() => (showLeft = false)}><svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" aria-hidden="true"><rect x="2" y="3" width="12" height="10" rx="1.8"/><line x1="5.5" y1="3" x2="5.5" y2="13"/></svg></button>
-        </div>
-
         <div class="sidebar-actions">
           <button class="sidebar-action" on:click={async () => {
             if (!sidecarReady) {
@@ -818,7 +814,6 @@
             sessions = [{ id: created.id, title: '新会话', time: '刚刚', state: 'active', thinking, file: created.file }, ...sessions]
             leftTab = 'Chats'
           }}><svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" aria-hidden="true"><circle cx="8" cy="8" r="5.5"/><line x1="8" y1="5" x2="8" y2="11"/><line x1="5" y1="8" x2="11" y2="8"/></svg>新建任务</button>
-          <button class="sidebar-action" on:click={() => { leftTab = 'Chats'; query = '' }}><svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" aria-hidden="true"><circle cx="6.8" cy="6.8" r="4.1"/><line x1="10" y1="10" x2="13.5" y2="13.5"/></svg>搜索会话</button>
         </div>
 
         <div class="sidebar-tabs">
@@ -860,6 +855,7 @@
           <span class="version">v{version}</span>
         </div>
       </aside>
+      <button class="panel-edge-toggle left" class:collapsed={!showLeft} aria-label={showLeft ? '收起左侧栏' : '展开左侧栏'} style={`left:${showLeft ? 207 : 0}px`} on:click={() => (showLeft = !showLeft)}><svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" aria-hidden="true"><rect x="2" y="3" width="12" height="10" rx="1.8"/><line x1={showLeft ? '5.5' : '10.5'} y1="3" x2={showLeft ? '5.5' : '10.5'} y2="13"/></svg></button>
 
       {#if sessionMenu}
         <div class="session-menu-backdrop" role="presentation" on:click={() => (sessionMenu = null)}>
@@ -927,7 +923,6 @@
 
       <aside class="workspace" class:collapsed={!showRight}>
         <div class="workspace-tabs">
-          <button class="workspace-collapse" aria-label="切换右侧栏" on:click={() => (showRight = !showRight)}><svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" aria-hidden="true"><rect x="2" y="3" width="12" height="10" rx="1.8"/><line x1="10.5" y1="3" x2="10.5" y2="13"/></svg></button>
           {#each ['文档', '变更', '终端', '运行'] as tab}<button class:active={panel === tab} on:click={() => (panel = tab as PanelTab)}>{tab}{#if tab === '变更' && gitChanges.length}<span class="badge">{gitChanges.length}</span>{/if}</button>{/each}
         </div>
         {#if panel === '文档'}
@@ -983,6 +978,7 @@
           <div class="panel-content"><div class="panel-title"><div><strong>运行中的任务</strong><small>当前没有后台进程</small></div></div><div class="empty-panel"><span>◌</span><strong>暂无运行任务</strong><small>Agent 启动开发服务器后会显示在这里</small></div></div>
         {/if}
       </aside>
+      <button class="panel-edge-toggle right" class:collapsed={!showRight} aria-label={showRight ? '收起右侧栏' : '展开右侧栏'} style={`right:${showRight ? rightWidth - 30 : 0}px`} on:click={() => (showRight = !showRight)}><svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" aria-hidden="true"><rect x="2" y="3" width="12" height="10" rx="1.8"/><line x1={showRight ? '10.5' : '5.5'} y1="3" x2={showRight ? '10.5' : '5.5'} y2="13"/></svg></button>
       {#if showRight}
         <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
         <div class="drag-handle" class:dragging={dragging === 'right'} style={`right:${rightWidth - 2.5}px`} role="separator" aria-label="调整右侧栏宽度" on:mousedown={(event) => startDrag(event, 'right')} on:dblclick={() => resetDrag('right')}></div>
