@@ -24,7 +24,7 @@
   let activeSession = '新会话'
   let activeSessionId = ''
   let panel: PanelTab = '文档'
-  let leftTab: 'Chats' | 'Files' = 'Chats'
+  let leftTab: 'Activity' | 'Chats' | 'Projects' = 'Projects'
   let showLeft = true
   let showRight = true
   let showSettings = false
@@ -92,6 +92,7 @@
 
   $: filteredSessions = sessions.filter((item) => !item.archived && item.title.toLowerCase().includes(query.toLowerCase())).sort((a, b) => Number(b.pinned) - Number(a.pinned))
   $: filteredFiles = files.filter((item) => item.path.toLowerCase().includes(query.toLowerCase()))
+  $: projectItems = files.filter((item) => item.kind === 'directory' && item.path.toLowerCase().includes(query.toLowerCase()))
   $: currentModelKey = modelChoice(models, sessions, activeSessionId)
   $: currentModel = models.find((item) => modelKey(item) === currentModelKey)
   $: currentModelLabel = currentModel ? currentModel.name : '选择模型'
@@ -798,13 +799,19 @@
 
     <div class="app-grid" style={`grid-template-columns:${showLeft ? 220 : 0}px minmax(430px, 1fr) ${showRight ? rightWidth : 0}px`}>
       <aside class="sidebar" class:collapsed={!showLeft}>
-        <div class="sidebar-head">
-          <button class="new-button" on:click={async () => {
+        <div class="sidebar-brand">
+          <span class="sidebar-brand-mark">π</span><strong>PiDeck</strong>
+          <button class="sidebar-collapse" aria-label="收起左侧栏" on:click={() => (showLeft = false)}><svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" aria-hidden="true"><rect x="2" y="3" width="12" height="10" rx="1.8"/><line x1="5.5" y1="3" x2="5.5" y2="13"/></svg></button>
+        </div>
+
+        <div class="sidebar-actions">
+          <button class="sidebar-action" on:click={async () => {
             if (!sidecarReady) {
               const draftId = `draft-${Date.now()}`
               activeSession = '新会话'
               activeSessionId = draftId
               sessions = [{ id: draftId, title: '新会话', time: '刚刚' }, ...sessions]
+              leftTab = 'Chats'
               return
             }
             const id = `session-${Date.now()}`
@@ -816,21 +823,31 @@
             activeSessionId = created.id
             activeSession = '新会话'
             sessions = [{ id: created.id, title: '新会话', time: '刚刚', state: 'active', thinking, file: created.file }, ...sessions]
-          }}><span>＋</span> 新建会话</button>
-          <button class="workspace-button" title={workspacePath} on:click={chooseWorkspace}>
-            <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round" aria-hidden="true"><path d="M1.5 4A1.5 1.5 0 0 1 3 2.5h3l2 2h5A1.5 1.5 0 0 1 14.5 6v6.5A1.5 1.5 0 0 1 13 14H3A1.5 1.5 0 0 1 1.5 12.5V4Z"/></svg>
-            <span class="workspace-label">{workspaceLabel()}</span>
-          </button>
+            leftTab = 'Chats'
+          }}><svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" aria-hidden="true"><circle cx="8" cy="8" r="5.5"/><line x1="8" y1="5" x2="8" y2="11"/><line x1="5" y1="8" x2="11" y2="8"/></svg>新建任务</button>
+          <button class="sidebar-action" on:click={() => { leftTab = 'Chats'; query = '' }}><svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" aria-hidden="true"><circle cx="6.8" cy="6.8" r="4.1"/><line x1="10" y1="10" x2="13.5" y2="13.5"/></svg>搜索会话</button>
         </div>
 
-        <div class="segmented">
-          <button class:selected={leftTab === 'Chats'} on:click={() => (leftTab = 'Chats')}>Chats</button><button class:selected={leftTab === 'Files'} on:click={() => { leftTab = 'Files'; void loadFiles() }}>Files</button>
+        <div class="sidebar-tabs">
+          <button class:active={leftTab === 'Activity'} on:click={() => (leftTab = 'Activity')}>⌁ <span>活动</span></button>
+          <button class:active={leftTab === 'Chats'} on:click={() => (leftTab = 'Chats')}>▱ <span>聊天</span></button>
+          <button class:active={leftTab === 'Projects'} on:click={() => { leftTab = 'Projects'; void loadFiles() }}>▱ <span>项目</span></button>
         </div>
 
-        <label class="search"><span>⌕</span><input placeholder={leftTab === 'Chats' ? '搜索会话' : '搜索文件'} bind:value={query} /></label>
-
-        {#if leftTab === 'Chats'}
-          <div class="session-heading"><span>会话</span><span class="session-count">{filteredSessions.length}</span></div>
+        {#if leftTab === 'Projects'}
+          <div class="sidebar-section-heading"><span>项目</span><span><button aria-label="选择工作区" on:click={() => void chooseWorkspace()}>＋</button><button aria-label="项目选项">×</button></span></div>
+          <div class="project-list">
+            {#if projectItems.length}
+              {#each projectItems as file}
+                <button class="project-item" on:click={() => void chooseWorkspace()}><span class="project-chevron">›</span><span class="project-folder">□</span><span class="project-name">{file.path}</span></button>
+              {/each}
+            {:else}
+              <div class="file-empty">选择项目目录后显示内容</div>
+            {/if}
+          </div>
+        {:else}
+          <label class="search"><span>⌕</span><input placeholder="搜索会话" bind:value={query} /></label>
+          <div class="session-heading"><span>{leftTab === 'Activity' ? '活动' : '聊天'}</span><span class="session-count">{filteredSessions.length}</span></div>
           <div class="sessions">
             {#each filteredSessions as session}
               <button class:current={activeSessionId === session.id} class="session" on:click={() => void selectSession(session)} on:contextmenu={(event) => openSessionMenu(event, session)}>
@@ -840,18 +857,6 @@
             {:else}
               <div class="file-empty">没有匹配的会话</div>
             {/each}
-          </div>
-        {:else}
-          <div class="file-list">
-            {#if filteredFiles.length}
-              {#each filteredFiles as file}
-                <button class:file-folder={file.kind === 'directory'} on:click={() => file.kind === 'file' && void previewFile(file.path)}><span>{file.kind === 'directory' ? '▸' : '·'}</span>{file.path}</button>
-              {/each}
-            {:else if files.length}
-              <div class="file-empty">没有匹配的文件</div>
-            {:else}
-              <div class="file-empty">选择项目目录后显示文件</div>
-            {/if}
           </div>
         {/if}
 

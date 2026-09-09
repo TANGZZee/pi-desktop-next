@@ -111,3 +111,42 @@ button { border: 0; cursor: pointer; color: inherit; }
   .thinking-label { display:none; }
   .composer-controls .model-button { padding:0 4px; }
 }
+
+/* PiDeck-style workspace rail. */
+.sidebar { padding:10px 9px 9px; background:#f7f7f7; }
+.sidebar-brand { display:flex; align-items:center; min-height:24px; color:#303030; }
+.sidebar-brand-mark { display:grid; place-items:center; width:15px; height:15px; margin-right:5px; border:1px solid #8a8a8a; border-radius:4px; color:#444; font:10px Georgia,serif; }
+.sidebar-brand strong { font:600 11px/1 Inter,sans-serif; letter-spacing:.08em; text-transform:uppercase; }
+.sidebar-collapse { display:grid; place-items:center; width:22px; height:22px; margin-left:auto; border-radius:5px; background:transparent; color:#777; }
+.sidebar-collapse:hover { background:#e9e9e9; }
+.sidebar-actions { display:flex; flex-direction:column; gap:2px; margin-top:11px; }
+.sidebar-action { display:flex; align-items:center; gap:7px; width:100%; height:26px; padding:0 2px; background:transparent; color:#555; font-size:10px; text-align:left; }
+.sidebar-action svg { color:#777; }
+.sidebar-action:hover { color:#222; }
+.sidebar-tabs { display:grid; grid-template-columns:1fr 1fr 1fr; gap:2px; padding:3px; margin:9px 0 0; border-radius:999px; background:#e8e8e8; }
+.sidebar-tabs button { display:flex; align-items:center; justify-content:center; gap:3px; min-width:0; height:22px; border-radius:999px; background:transparent; color:#777; font-size:9px; }
+.sidebar-tabs button.active { background:#fff; color:#333; box-shadow:0 1px 3px rgba(0,0,0,.12); }
+.sidebar-section-heading { display:flex; align-items:center; justify-content:space-between; margin:11px 3px 4px; color:#777; font-size:9px; }
+.sidebar-section-heading > span:last-child { display:flex; align-items:center; gap:1px; }
+.sidebar-section-heading button { display:grid; place-items:center; width:18px; height:18px; border-radius:4px; background:transparent; color:#777; font-size:13px; line-height:1; }
+.sidebar-section-heading button:hover { background:#e7e7e7; }
+.project-list { flex:1; min-height:0; overflow:auto; }
+.project-item { display:flex; align-items:center; gap:5px; width:100%; min-height:27px; padding:0 3px; background:transparent; color:#444; font-size:10px; text-align:left; }
+.project-item:hover { background:#e8e8e8; border-radius:5px; }
+.project-chevron { width:8px; color:#777; font-size:12px; }
+.project-folder { width:12px; color:#777; font-size:11px; }
+.project-name { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.project-file { color:#666; }
+.sidebar-footer { padding-top:7px; border-top-color:#dedede; }
+.search { border-color:#dedede; background:#fff; color:#777; }
+.search input::placeholder { color:#999; }
+.session:hover, .file-list button:hover { background:#e9e9e9; }
+.session.current { background:#e5e5e5; }
+.status-dot { background:#999; }
+.status-dot.live { background:#555; box-shadow:0 0 0 3px #ddd; }
+.status-dot.complete { background:#888; }
+.session-copy strong { color:#444; }
+.session-copy small, .file-list button, .file-empty, .version { color:#888; }
+.file-list .file-folder { color:#555; }
+.icon-button { color:#777; }
+.icon-button:hover { background:#e9e9e9; }
