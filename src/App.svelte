@@ -1,6 +1,11 @@
 <script lang="ts">
+  import { onMount } from 'svelte'
+  import { invoke } from '@tauri-apps/api/core'
+  import { listen } from '@tauri-apps/api/event'
+
   type PanelTab = '文档' | '变更' | '终端' | '运行'
   type Session = { title: string; time: string; state?: 'active' | 'done' }
+  type AgentEnvelope = { type: string; id?: number; ok?: boolean; result?: unknown; error?: string; sessionId?: string; event?: { type?: string; delta?: string; message?: string } }
 
   const sessions: Session[] = [
     { title: '设计 pi-agent 桌面端', time: '刚刚', state: 'active' },
@@ -15,14 +20,41 @@
   let showThinking = false
   let isRunning = false
   let sentMessages: string[] = []
+  let agentReply = ''
+  let sidecarReady = false
+  let modelCount = 0
+
+  onMount(async () => {
+    const unlisten = await listen<AgentEnvelope>('agent-message', ({ payload }) => {
+      if (payload.type === 'event') {
+        const event = payload.event
+        if (event?.type === 'message_update' && event.delta) agentReply += event.delta
+        if (event?.type === 'agent_end' || event?.type === 'error') isRunning = false
+      }
+    })
+    try {
+      await invoke('agent_request', { request: { type: 'init', payload: { cwd: '.' } } })
+      sidecarReady = true
+      const requestId = await invoke<number>('agent_request', { request: { type: 'list_models', payload: {} } })
+      void requestId
+    } catch {
+      // Browser preview mode remains useful without the native sidecar.
+    }
+    return unlisten
+  })
 
   function submit() {
     const text = inputText.trim()
     if (!text) return
     sentMessages = [...sentMessages, text]
     inputText = ''
+    agentReply = ''
     isRunning = true
-    window.setTimeout(() => (isRunning = false), 1400)
+    if (sidecarReady) {
+      void invoke('agent_request', { request: { type: 'prompt', payload: { sessionId: 'main', text, cwd: '.', behavior: 'followUp' } } }).catch(() => (isRunning = false))
+    } else {
+      window.setTimeout(() => (isRunning = false), 1400)
+    }
   }
 
   function handleKeydown(event: KeyboardEvent) {
@@ -110,6 +142,7 @@
           {#each sentMessages as message}
             <div class="message user-message"><div class="user-bubble">{message}</div><time>刚刚</time></div>
           {/each}
+          {#if agentReply}<div class="message assistant-message"><div class="message-meta"><span class="assistant-avatar">π</span><strong>Pi Agent</strong><span>实时回复</span></div><p>{agentReply}</p></div>{/if}
           {#if isRunning}<div class="running-line"><span class="spinner"></span> Agent 正在处理…</div>{/if}
         </div>
 
