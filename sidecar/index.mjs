@@ -46,9 +46,22 @@ async function createSession(id, cwd = workspace) {
   })
   const unsubscribe = session.subscribe((event) => send({ type: 'event', sessionId: id, event: summarizeEvent(event) }))
   sessions.set(id, { session, unsubscribe, cwd })
-  return { id: session.sessionId, cwd }
+  return { id, sessionId: session.sessionId, cwd, file: session.sessionManager.getSessionFile() }
 }
 
+async function openSession(id, file) {
+  const modelRuntime = await ensureRuntime()
+  const sessionManager = SessionManager.open(file)
+  const { session } = await createAgentSession({ cwd: sessionManager.getCwd() || workspace, agentDir, modelRuntime, sessionManager })
+  const unsubscribe = session.subscribe((event) => send({ type: 'event', sessionId: id, event: summarizeEvent(event) }))
+  sessions.set(id, { session, unsubscribe, cwd: sessionManager.getCwd() || workspace, file })
+  return { id, sessionId: session.sessionId, cwd: sessionManager.getCwd() || workspace, file }
+}
+
+async function listSessions(cwd = workspace) {
+  const infos = await SessionManager.list(cwd, path.join(agentDir, 'sessions'))
+  return infos.map((info) => ({ id: info.id, title: info.name || '未命名会话', cwd: info.cwd || cwd, file: info.path, modifiedAt: info.modified.getTime() }))
+}
 async function handle(request) {
   const { id, type, payload = {} } = request
   try {
@@ -65,6 +78,14 @@ async function handle(request) {
     }
     if (type === 'create_session') {
       reply(id, await createSession(payload.sessionId || `session-${Date.now()}`, payload.cwd || workspace))
+      return
+    }
+    if (type === 'list_sessions') {
+      reply(id, await listSessions(payload.cwd || workspace))
+      return
+    }
+    if (type === 'open_session') {
+      reply(id, await openSession(payload.sessionId || payload.file, payload.file))
       return
     }
     if (type === 'prompt') {

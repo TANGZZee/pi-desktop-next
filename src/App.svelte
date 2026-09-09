@@ -4,17 +4,18 @@
   import { listen } from '@tauri-apps/api/event'
 
   type PanelTab = '文档' | '变更' | '终端' | '运行'
-  type Session = { title: string; time: string; state?: 'active' | 'done' }
+  type Session = { id: string; title: string; time: string; file?: string; state?: 'active' | 'done' }
   type AgentEnvelope = { type: string; id?: number; ok?: boolean; result?: unknown; error?: string; sessionId?: string; event?: { type?: string; delta?: string; text?: string; thinking?: string; toolName?: string; partialResult?: unknown; result?: unknown; message?: string } }
 
-  const sessions: Session[] = [
-    { title: '设计 pi-agent 桌面端', time: '刚刚', state: 'active' },
-    { title: '优化 Percho 内存占用', time: '昨天', state: 'done' },
-    { title: '研究 Tauri sidecar 架构', time: '周一' },
-    { title: '添加 Git 工作台', time: '上周' }
+  let sessions: Session[] = [
+    { id: 'main', title: '设计 pi-agent 桌面端', time: '刚刚', state: 'active' },
+    { id: 'memory', title: '优化 Percho 内存占用', time: '昨天', state: 'done' },
+    { id: 'sidecar', title: '研究 Tauri sidecar 架构', time: '周一' },
+    { id: 'git', title: '添加 Git 工作台', time: '上周' }
   ]
 
   let activeSession = sessions[0].title
+  let activeSessionId = sessions[0].id
   let panel: PanelTab = '文档'
   let inputText = ''
   let showThinking = false
@@ -26,9 +27,22 @@
   let sidecarReady = false
   let modelCount = 0
   let queuedMessages: string[] = []
+  const pending = new Map<number, (value: unknown) => void>()
+  let requestSequence = 0
+
+  function request(type: string, payload = {}) {
+    const id = ++requestSequence
+    const promise = new Promise<unknown>((resolve) => pending.set(id, resolve))
+    void invoke('agent_request', { request: { id, type, payload } })
+    return promise
+  }
 
   onMount(async () => {
     const unlisten = await listen<AgentEnvelope>('agent-message', ({ payload }) => {
+      if (payload.type === 'response' && payload.id) {
+        pending.get(payload.id)?.(payload.result)
+        pending.delete(payload.id)
+      }
       if (payload.type === 'event') {
         const event = payload.event
         if (event?.type === 'message_update' && event.delta) agentReply += event.delta
@@ -39,15 +53,28 @@
       }
     })
     try {
-      await invoke('agent_request', { request: { type: 'init', payload: { cwd: '.' } } })
+      await request('init', { cwd: '.' })
       sidecarReady = true
-      const requestId = await invoke<number>('agent_request', { request: { type: 'list_models', payload: {} } })
-      void requestId
+      const loaded = await request('list_sessions', { cwd: '.' }) as Array<{ id: string; title: string; file: string; modifiedAt: number }>
+      if (loaded?.length) {
+        sessions = loaded.map((item) => ({ id: item.id, title: item.title, file: item.file, time: new Date(item.modifiedAt).toLocaleDateString() }))
+        activeSessionId = sessions[0].id
+        activeSession = sessions[0].title
+      }
+
     } catch {
       // Browser preview mode remains useful without the native sidecar.
     }
     return unlisten
   })
+
+  async function selectSession(session: Session) {
+    activeSessionId = session.id
+    activeSession = session.title
+    sentMessages = []
+    agentReply = ''
+    if (sidecarReady && session.file) await request('open_session', { sessionId: session.id, file: session.file })
+  }
 
   function submit(behavior: 'steer' | 'followUp' = 'steer') {
     const text = inputText.trim()
@@ -59,7 +86,8 @@
     isRunning = true
     if (behavior === 'followUp') queuedMessages = [...queuedMessages, text]
     if (sidecarReady) {
-      void invoke('agent_request', { request: { type: 'prompt', payload: { sessionId: 'main', text, cwd: '.', behavior } } }).catch(() => (isRunning = false))
+      void request('prompt', { sessionId: activeSessionId, text, cwd: '.', behavior })
+        .catch(() => (isRunning = false))
     } else {
       window.setTimeout(() => (isRunning = false), 1400)
     }
@@ -67,7 +95,7 @@
 
   function stop() {
     if (!sidecarReady) { isRunning = false; return }
-    void invoke('agent_request', { request: { type: 'abort', payload: { sessionId: 'main' } } }).finally(() => (isRunning = false))
+    void request('abort', { sessionId: activeSessionId }).finally(() => (isRunning = false))
   }
 
   function handleKeydown(event: KeyboardEvent) {
@@ -99,7 +127,14 @@
     <div class="app-grid">
       <aside class="sidebar">
         <div class="sidebar-head">
-          <button class="new-button" on:click={() => (activeSession = '新会话')}><span>＋</span> 新建会话</button>
+          <button class="new-button" on:click={async () => {
+            if (!sidecarReady) { activeSession = '新会话'; activeSessionId = `draft-${Date.now()}`; return }
+            const id = `session-${Date.now()}`
+            const created = await request('create_session', { sessionId: id, cwd: '.' }) as { id: string }
+            activeSessionId = created.id
+            activeSession = '新会话'
+            sessions = [{ id: created.id, title: '新会话', time: '刚刚', state: 'active' }, ...sessions]
+          }}><span>＋</span> 新建会话</button>
           <button class="small-icon" aria-label="更多">•••</button>
         </div>
 
@@ -117,10 +152,10 @@
         <div class="session-heading"><span>会话</span><button aria-label="排序">⇅</button></div>
         <div class="sessions">
           {#each sessions as session}
-            <button class:current={activeSession === session.title} class="session" on:click={() => (activeSession = session.title)}>
+            <button class:current={activeSessionId === session.id} class="session" on:click={() => void selectSession(session)}>
               <span class:live={session.state === 'active'} class:complete={session.state === 'done'} class="status-dot"></span>
               <span class="session-copy"><strong>{session.title}</strong><small>{session.time}</small></span>
-              {#if activeSession === session.title}<span class="more">•••</span>{/if}
+              {#if activeSessionId === session.id}<span class="more">•••</span>{/if}
             </button>
           {/each}
         </div>
