@@ -230,7 +230,13 @@ async function handle(request) {
       return
     }
     if (type === 'create_session') {
-      reply(id, await createSession(payload.sessionId || `session-${Date.now()}`, payload.cwd || workspace, payload.thinking))
+      const pid = payload.sessionId || `session-${Date.now()}`
+      if (sessions.has(pid)) {
+        const existing = sessions.get(pid)
+        reply(id, { id: pid, sessionId: existing.session.sessionId, cwd: existing.cwd, file: existing.file })
+        return
+      }
+      reply(id, await createSession(pid, payload.cwd || workspace, payload.thinking))
       return
     }
     if (type === 'session_stats') {

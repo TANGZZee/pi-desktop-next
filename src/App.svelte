@@ -16,10 +16,10 @@
   const CTX_CIRC = 2 * Math.PI * 7
   const EMPTY_CTX: CtxStats = { currentContext: 0, window: 0, totals: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 }, costUsd: 0, cacheHitRate: 0 }
 
-  let sessions: Session[] = [{ id: 'main', title: '新会话', time: '刚刚' }]
+  let sessions: Session[] = []
 
   let activeSession = '新会话'
-  let activeSessionId = 'main'
+  let activeSessionId = ''
   let panel: PanelTab = '文档'
   let leftTab: 'Chats' | 'Files' = 'Chats'
   let workspacePath = '.'
@@ -84,9 +84,19 @@
     sessions = sessions.map((item) => (item.id === id ? { ...item, state } : item))
   }
 
-  // 记住会话级的模型 / 思考档位选择
+  // 记住会话级的模型 / 思考档位选择；无记录时建占位会话
   function remember(id: string, patch: Partial<Session>) {
-    sessions = sessions.map((item) => (item.id === id ? { ...item, ...patch } : item))
+    if (!id) return
+    if (!sessions.some((item) => item.id === id)) sessions = [{ id, title: '新会话', time: '刚刚', ...patch }, ...sessions]
+    else sessions = sessions.map((item) => (item.id === id ? { ...item, ...patch } : item))
+  }
+
+  function ensureActiveId() {
+    if (!activeSessionId) {
+      activeSessionId = `session-${Date.now()}`
+      activeSession = '新会话'
+    }
+    return activeSessionId
   }
 
   function modelKey(model: ModelInfo) {
@@ -191,9 +201,9 @@
   }
 
   async function refreshCtxStats() {
-    if (!sidecarReady) return
+    if (!sidecarReady || !activeSessionId) return
     try {
-      ctxStats = await request('session_stats', { sessionId: activeSessionId }) as CtxStats
+      ctxStats = (await request('session_stats', { sessionId: activeSessionId }) as CtxStats) ?? { ...EMPTY_CTX }
     } catch {
       ctxStats = { ...EMPTY_CTX }
     }
@@ -226,11 +236,13 @@
 
   async function setModel(value: string) {
     if (!value || !sidecarReady) return
+    const id = ensureActiveId()
+    remember(id, { model: value })
+    if (!sessions.some((item) => item.id === id && item.file)) return
     const [provider, modelId] = value.split(MODEL_SEPARATOR)
-    remember(activeSessionId, { model: value })
-    const result = await request('set_model', { sessionId: activeSessionId, provider, modelId }) as { provider: string; id: string; thinkingLevel?: string } | null
-    if (result) remember(activeSessionId, { model: `${result.provider}${MODEL_SEPARATOR}${result.id}`, thinking: result.thinkingLevel ?? thinkingChoice(sessions, activeSessionId) })
-    else remember(activeSessionId, { model: undefined })
+    const result = await request('set_model', { sessionId: id, provider, modelId }) as { provider: string; id: string; thinkingLevel?: string } | null
+    if (result) remember(id, { model: `${result.provider}${MODEL_SEPARATOR}${result.id}`, thinking: result.thinkingLevel ?? thinkingChoice(sessions, id) })
+    else remember(id, { model: undefined })
   }
 
   function pickModel(model: ModelInfo) {
@@ -241,10 +253,12 @@
 
   async function setThinking(level: string) {
     if (!level || !sidecarReady) return
-    remember(activeSessionId, { thinking: level })
-    const result = await request('set_thinking', { sessionId: activeSessionId, level }) as { level?: string } | null
+    const id = ensureActiveId()
+    remember(id, { thinking: level })
+    if (!sessions.some((item) => item.id === id && item.file)) return
+    const result = await request('set_thinking', { sessionId: id, level }) as { level?: string } | null
     // setThinkingLevel 会按模型能力 clamp，以 sidecar 回传的实际档位为准
-    remember(activeSessionId, { thinking: result?.level })
+    remember(id, { thinking: result?.level })
   }
 
   function chooseThinking(event: Event) {
@@ -414,7 +428,7 @@
   function submit(behavior: 'steer' | 'followUp' = 'steer') {
     const text = inputText.trim()
     if (!text) return
-    const id = activeSessionId
+    const id = ensureActiveId()
     const slot = slotFor(id)
     inputText = ''
     const newTitle = maybeAutoTitle(id, text)
@@ -426,7 +440,22 @@
       queue: behavior === 'followUp' ? [...slot.queue, text] : slot.queue
     })
     if (sidecarReady) {
-      void request('prompt', { sessionId: id, text, cwd: '.', behavior })
+      void (async () => {
+        const rec = sessions.find((item) => item.id === id)
+        if (!rec?.file) {
+          const rawThinking = rec?.thinking ?? localStorage.getItem('pdn.thinking') ?? undefined
+          const payload: Record<string, unknown> = { sessionId: id, cwd: workspacePath }
+          if (rawThinking && THINKING_LEVELS.includes(rawThinking)) payload.thinking = rawThinking
+          const created = await request('create_session', payload) as { id: string; file?: string } | null
+          if (created?.file) remember(id, { file: created.file })
+          const model = sessions.find((item) => item.id === id)?.model
+          if (model) {
+            const [provider, modelId] = model.split(MODEL_SEPARATOR)
+            await request('set_model', { sessionId: id, provider, modelId })
+          }
+        }
+        await request('prompt', { sessionId: id, text, cwd: workspacePath, behavior })
+      })()
         .then(() => { if (newTitle) void request('rename_session', { sessionId: id, name: newTitle }) })
         .catch(() => patchSlot(id, { running: false }))
     } else {
@@ -484,12 +513,12 @@
             const id = `session-${Date.now()}`
             const rawThinking = localStorage.getItem('pdn.thinking')
             const thinking = rawThinking && THINKING_LEVELS.includes(rawThinking) ? rawThinking : undefined
-            const payload: Record<string, unknown> = { sessionId: id, cwd: '.' }
+            const payload: Record<string, unknown> = { sessionId: id, cwd: workspacePath }
             if (thinking) payload.thinking = thinking
-            const created = await request('create_session', payload) as { id: string }
+            const created = await request('create_session', payload) as { id: string; file?: string }
             activeSessionId = created.id
             activeSession = '新会话'
-            sessions = [{ id: created.id, title: '新会话', time: '刚刚', state: 'active', thinking }, ...sessions]
+            sessions = [{ id: created.id, title: '新会话', time: '刚刚', state: 'active', thinking, file: created.file }, ...sessions]
           }}><span>＋</span> 新建会话</button>
         </div>
 
@@ -559,7 +588,7 @@
         <div class="composer-wrap">
           <div class="composer">
             <textarea bind:this={composerInput} bind:value={inputText} on:keydown={handleKeydown} placeholder="输入消息…" rows="2"></textarea>
-            <div class="composer-toolbar"><div class="composer-left"><div class="model-dropdown" use:clickOutside><button class="model-button" bind:this={modelButtonRef} disabled={!models.length} aria-haspopup="listbox" aria-expanded={modelOpen} aria-label="模型" on:click={toggleModel}><span>{currentModelLabel}</span><svg width="8" height="8" viewBox="0 0 8 8" fill="none" aria-hidden="true"><path d="M1.5 2.5 4 5l2.5-2.5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></svg></button>{#if modelOpen}<div class="model-menu" class:up={modelMenuUp}><div class="model-search"><span>⌕</span><input bind:this={modelSearchInput} bind:value={modelQuery} placeholder="搜索模型…" aria-label="搜索模型" /></div><div class="model-list">{#each modelDropdownGroups as group (group.provider)}<div class="model-group-title">{group.provider}</div>{#each group.items as model (modelKey(model))}<button class="model-option" class:selected={modelKey(model) === currentModelKey} on:click={() => pickModel(model)}><span class="model-dot"></span><span class="model-name">{model.name}</span></button>{/each}{:else}<div class="model-empty">没有匹配的模型</div>{/each}</div></div>{/if}</div><label class="thinking-slider"><span class="thinking-label">思考</span><input type="range" min="0" max={THINKING_LEVELS.length - 1} step="1" value={thinkingIndex} disabled={!sidecarReady} aria-label="思考档位" on:change={chooseThinking} /><span class="thinking-value">{thinkingLabel}</span></label></div><div class="composer-right"><div class="ctx-dropdown" use:clickOutsideCtx><button class="ctx-button" bind:this={ctxButtonRef} disabled={!sidecarReady} aria-label="上下文用量" aria-haspopup="true" aria-expanded={ctxOpen} on:click={toggleCtx}><svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true"><circle cx="9" cy="9" r="7" fill="none" stroke="#e4e7e3" stroke-width="2"/>{#if ctxStats?.window}<circle cx="9" cy="9" r="7" fill="none" stroke="#5f8466" stroke-width="2" stroke-linecap="round" stroke-dasharray={ctxDash()} transform="rotate(-90 9 9)"/>{/if}</svg></button>{#if ctxOpen}<div class="ctx-menu" class:up={ctxMenuUp}><div class="ctx-head"><strong>上下文容量（估算）</strong><span>{ctxProgress()}%</span></div><div class="ctx-row"><span>当前上下文</span><span>{fmtWan(ctxStats.currentContext)}</span></div><div class="ctx-row"><span>可用容量</span><span>{fmtWan(Math.max(0, ctxStats.window - ctxStats.currentContext))}</span></div><div class="ctx-row"><span>上下文窗口</span><span>{fmtWan(ctxStats.window)}</span></div><div class="ctx-bar"><i style="width:{ctxProgress()}%"></i></div><div class="ctx-divider"></div><div class="ctx-sub">本会话累计</div><div class="ctx-row"><span>总 Token</span><span>{fmtWan(ctxStats.totals.total)}</span></div><div class="ctx-row"><span>输入</span><span>{fmtWan(ctxStats.totals.input)}</span></div><div class="ctx-row"><span>输出</span><span>{fmtWan(ctxStats.totals.output)}</span></div><div class="ctx-row"><span>缓存读取</span><span>{fmtWan(ctxStats.totals.cacheRead)}</span></div><div class="ctx-row"><span>缓存写入</span><span>{fmtWan(ctxStats.totals.cacheWrite)}</span></div><div class="ctx-divider"></div><div class="ctx-row"><span>本地费率估算</span><span>${ctxStats.costUsd.toFixed(2)}</span></div><div class="ctx-row"><span>平均缓存命中率</span><span>{(ctxStats.cacheHitRate * 100).toFixed(1)}%</span></div><div class="ctx-note">按本地模型费率估算，未提供费率则为 0</div></div>{/if}</div><span class="hint">Enter 插话 · Alt+Enter 排队</span><button class:stop={runState[activeSessionId]?.running} class="send" on:click={runState[activeSessionId]?.running ? stop : () => submit('steer')}>{runState[activeSessionId]?.running ? '停止' : '发送'} <span>{runState[activeSessionId]?.running ? '■' : '↑'}</span></button></div></div>
+            <div class="composer-toolbar"><div class="composer-left"><div class="model-dropdown" use:clickOutside><button class="model-button" bind:this={modelButtonRef} disabled={!models.length} aria-haspopup="listbox" aria-expanded={modelOpen} aria-label="模型" on:click={toggleModel}><span>{currentModelLabel}</span><svg width="8" height="8" viewBox="0 0 8 8" fill="none" aria-hidden="true"><path d="M1.5 2.5 4 5l2.5-2.5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></svg></button>{#if modelOpen}<div class="model-menu" class:up={modelMenuUp}><div class="model-search"><span>⌕</span><input bind:this={modelSearchInput} bind:value={modelQuery} placeholder="搜索模型…" aria-label="搜索模型" /></div><div class="model-list">{#each modelDropdownGroups as group (group.provider)}<div class="model-group-title">{group.provider}</div>{#each group.items as model (modelKey(model))}<button class="model-option" class:selected={modelKey(model) === currentModelKey} on:click={() => pickModel(model)}><span class="model-dot"></span><span class="model-name">{model.name}</span></button>{/each}{:else}<div class="model-empty">没有匹配的模型</div>{/each}</div></div>{/if}</div><label class="thinking-slider"><span class="thinking-label">思考</span><input type="range" min="0" max={THINKING_LEVELS.length - 1} step="1" value={thinkingIndex} disabled={!sidecarReady} aria-label="思考档位" on:change={chooseThinking} /><span class="thinking-value">{thinkingLabel}</span></label></div><div class="composer-right"><div class="ctx-dropdown" use:clickOutsideCtx><button class="ctx-button" bind:this={ctxButtonRef} disabled={!sidecarReady || !activeSessionId} aria-label="上下文用量" aria-haspopup="true" aria-expanded={ctxOpen} on:click={toggleCtx}><svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true"><circle cx="9" cy="9" r="7" fill="none" stroke="#e4e7e3" stroke-width="2"/>{#if ctxStats?.window}<circle cx="9" cy="9" r="7" fill="none" stroke="#5f8466" stroke-width="2" stroke-linecap="round" stroke-dasharray={ctxDash()} transform="rotate(-90 9 9)"/>{/if}</svg></button>{#if ctxOpen}<div class="ctx-menu" class:up={ctxMenuUp}><div class="ctx-head"><strong>上下文容量（估算）</strong><span>{ctxProgress()}%</span></div><div class="ctx-row"><span>当前上下文</span><span>{fmtWan(ctxStats.currentContext)}</span></div><div class="ctx-row"><span>可用容量</span><span>{fmtWan(Math.max(0, ctxStats.window - ctxStats.currentContext))}</span></div><div class="ctx-row"><span>上下文窗口</span><span>{fmtWan(ctxStats.window)}</span></div><div class="ctx-bar"><i style="width:{ctxProgress()}%"></i></div><div class="ctx-divider"></div><div class="ctx-sub">本会话累计</div><div class="ctx-row"><span>总 Token</span><span>{fmtWan(ctxStats.totals.total)}</span></div><div class="ctx-row"><span>输入</span><span>{fmtWan(ctxStats.totals.input)}</span></div><div class="ctx-row"><span>输出</span><span>{fmtWan(ctxStats.totals.output)}</span></div><div class="ctx-row"><span>缓存读取</span><span>{fmtWan(ctxStats.totals.cacheRead)}</span></div><div class="ctx-row"><span>缓存写入</span><span>{fmtWan(ctxStats.totals.cacheWrite)}</span></div><div class="ctx-divider"></div><div class="ctx-row"><span>本地费率估算</span><span>${ctxStats.costUsd.toFixed(2)}</span></div><div class="ctx-row"><span>平均缓存命中率</span><span>{(ctxStats.cacheHitRate * 100).toFixed(1)}%</span></div><div class="ctx-note">按本地模型费率估算，未提供费率则为 0</div></div>{/if}</div><span class="hint">Enter 插话 · Alt+Enter 排队</span><button class:stop={runState[activeSessionId]?.running} class="send" on:click={runState[activeSessionId]?.running ? stop : () => submit('steer')}>{runState[activeSessionId]?.running ? '停止' : '发送'} <span>{runState[activeSessionId]?.running ? '■' : '↑'}</span></button></div></div>
           </div>
           <div class="composer-note">Pi Agent 可以读取和修改当前工作区中的文件</div>
         </div>
