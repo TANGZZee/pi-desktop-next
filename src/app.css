@@ -11,10 +11,10 @@ button { border: 0; cursor: pointer; color: inherit; }
 .brand { display:flex; align-items:center; gap:8px; font-weight:600; font-size:13px; letter-spacing:-.2px; }.brand-mark { display:grid; place-items:center; width:22px; height:22px; border-radius:7px; background:#232323; color:#fff; font-family: Georgia, serif; font-size:15px; }
 .title-actions { margin-left:auto; display:flex; align-items:center; gap:7px; }.panel-toggle { display:grid; place-items:center; width:26px; height:26px; border-radius:7px; background:transparent; color:#9a9d9a; }.panel-toggle:hover { background:#eef0ed; }.panel-toggle.toggled { background:#e4e6e3; color:#6c706d; }.conn-chip { display:inline-flex; align-items:center; gap:5px; padding:4px 8px; border:0; border-radius:999px; background:#f1f3f0; color:#6c706d; font-size:9px; }.conn-chip i { width:6px; height:6px; border-radius:50%; background:#d0806f; }.conn-chip.connected i { background:#6da477; }
 .app-grid { position:relative; display:grid; grid-template-columns: max-content minmax(430px, 1fr) max-content; min-height:0; flex:1; transition:grid-template-columns .22s ease; }.sidebar, .workspace { min-width:0; background:#f5f6f4; }.sidebar { display:flex; flex-direction:column; width:100%; border-right:1px solid #e0e2df; padding:15px 12px 11px; overflow:hidden; }.workspace { width:100%; border-left:1px solid #e0e2df; overflow:hidden; }.sidebar.collapsed, .workspace.collapsed { width:0; border:0; padding:0; overflow:hidden; }
-.sidebar-head { display:flex; gap:0; margin-bottom:10px; }
-.new-button, .workspace-button { height:30px; padding:0 8px; border-radius:0; }
-.new-button { flex:0 0 92px; gap:5px; font-size:10px; box-shadow:none; border-radius:7px 0 0 7px; }
-.workspace-button { flex:1 1 auto; min-width:0; border-radius:0 7px 7px 0; font-size:10px; }
+.sidebar-head { display:grid; grid-template-columns:1fr 1fr; gap:3px; padding:3px; margin-bottom:10px; background:#e7e9e6; border-radius:7px; }
+.new-button, .workspace-button { height:27px; padding:0 7px; border-radius:5px; }
+.new-button { gap:5px; font-size:10px; box-shadow:0 1px 3px rgba(0,0,0,.08); }
+.workspace-button { font-size:10px; }
 .new-button span { font-size:14px; }
 .session { min-height:31px; padding:5px 7px; gap:7px; }
 .session-menu-backdrop { position:fixed; inset:0; z-index:80; }
@@ -82,8 +82,16 @@ button { border: 0; cursor: pointer; color: inherit; }
 @keyframes pixel-burst { 0% { transform:translate(0,4px) scale(.45); opacity:0; } 12% { opacity:1; } 68% { transform:translate(calc(var(--travel) * -1),0) scale(1); opacity:.95; } 100% { transform:translate(calc(var(--travel) * -1.35),-2px) scale(.35); opacity:0; } }
 
 /* First-pass visual references: compact control rail and an opaque, animated pixel track. */
-.composer-controls { grid-template-columns:26px 26px 112px 72px 26px; }
+.composer-controls { display:flex; align-items:center; gap:6px; }
+.composer-controls > .attach-button,
+.composer-controls > .mode-dropdown,
+.composer-controls > .model-dropdown,
+.composer-controls > .thinking-dropdown,
+.composer-controls > .ctx-dropdown { width:auto; }
 .composer-controls .model-button { max-width:112px; }
+.composer-controls .mode-button,
+.composer-controls .model-button,
+.composer-controls .thinking-button { width:auto; }
 .thinking-slider { height:30px; }
 .thinking-track, .thinking-fill { top:5px; height:18px; border-radius:5px; }
 .thinking-track { background:#d8dbd8; }
@@ -98,7 +106,7 @@ button { border: 0; cursor: pointer; color: inherit; }
 
 @media (max-width:560px) {
   .composer-toolbar { grid-template-columns:minmax(0,1fr) 58px; gap:4px; padding-right:4px; padding-left:6px; }
-  .composer-controls { grid-template-columns:24px 24px 88px 64px 24px; gap:3px; }
+  .composer-controls { gap:3px; }
   .composer-right, .composer-right .send { width:58px; min-width:58px; }
   .thinking-label { display:none; }
   .composer-controls .model-button { padding:0 4px; }
