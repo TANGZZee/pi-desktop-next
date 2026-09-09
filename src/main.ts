@@ -1,6 +1,6 @@
-// main.ts — mount minimal shell
+// main.ts — Svelte 5 mount API
 import './app.css'
+import { mount } from 'svelte'
 import App from './App.svelte'
 
-// @ts-expect-error target non-null (ponytail: id=app always exists in index.html)
-new App({ target: document.getElementById('app') })
+mount(App, { target: document.getElementById('app')! })
