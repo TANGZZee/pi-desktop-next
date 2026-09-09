@@ -9,3 +9,4 @@ src-tauri/gen/schemas/
 # system
 .DS_Store
 Thumbs.db
+.local/agent-work/

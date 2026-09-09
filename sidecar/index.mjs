@@ -112,7 +112,7 @@ async function git(cwd, args) {
 
 async function gitStatus(cwd = workspace) {
   const output = await git(cwd, ['status', '--porcelain=v1'])
-  return output.split(/\\r?\\n/).filter(Boolean).map((line) => ({ code: line.slice(0, 2), path: line.slice(3) }))
+  return output.split(/\r?\n/).filter(Boolean).map((line) => ({ code: line.slice(0, 2), path: line.slice(3) }))
 }
 
 async function gitDiff(cwd, file) {
@@ -167,6 +167,23 @@ async function handle(request) {
     }
     if (type === 'open_session') {
       reply(id, await openSession(payload.sessionId || payload.file, payload.file))
+      return
+    }
+    if (type === 'set_model') {
+      const entry = sessions.get(payload.sessionId)
+      if (!entry) throw new Error(`会话不存在: ${payload.sessionId}`)
+      const model = (await ensureRuntime()).getModels().find((item) => item.provider === payload.provider && item.id === payload.modelId)
+      if (!model) throw new Error(`模型不存在: ${payload.provider}/${payload.modelId}`)
+      await entry.session.setModel(model)
+      reply(id, { provider: model.provider, id: model.id, name: model.name, thinkingLevel: entry.session.thinkingLevel })
+      return
+    }
+    if (type === 'set_thinking') {
+      const entry = sessions.get(payload.sessionId)
+      if (!entry) throw new Error(`会话不存在: ${payload.sessionId}`)
+      if (!payload.level) throw new Error('缺少思考档位')
+      entry.session.setThinkingLevel(payload.level)
+      reply(id, { level: entry.session.thinkingLevel })
       return
     }
     if (type === 'prompt') {

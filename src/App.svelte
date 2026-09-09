@@ -5,7 +5,8 @@
   import { open } from '@tauri-apps/plugin-dialog'
 
   type PanelTab = '文档' | '变更' | '终端' | '运行'
-  type Session = { id: string; title: string; time: string; file?: string; state?: 'active' | 'done' }
+  type Session = { id: string; title: string; time: string; file?: string; state?: 'active' | 'done'; model?: string; thinking?: string }
+  type ModelInfo = { provider: string; id: string; name: string; reasoning: boolean }
   type GitChange = { code: string; path: string }
   type RunSlot = { reply: string; thinking: string; tool: string; running: boolean; queue: string[]; sent: string[] }
 
@@ -32,6 +33,12 @@
   let runState: Record<string, RunSlot> = {}
   let sidecarReady = false
   let modelCount = 0
+  let models: ModelInfo[] = []
+  // 与 SDK 保持一致：THINKING_LEVEL_OPTIONS / DEFAULT_THINKING_LEVEL
+  const MODEL_SEPARATOR = '\u0000'
+  const THINKING_LEVELS = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']
+  const THINKING_LABELS: Record<string, string> = { off: '关', minimal: '极低', low: '低', medium: '中', high: '高', xhigh: '超高', max: '最大' }
+  const DEFAULT_THINKING = 'medium'
   const pending = new Map<number, (value: unknown) => void>()
   let requestSequence = 0
 
@@ -50,6 +57,55 @@
 
   function markSession(id: string, state: 'active' | 'done') {
     sessions = sessions.map((item) => (item.id === id ? { ...item, state } : item))
+  }
+
+  // 记住会话级的模型 / 思考档位选择
+  function remember(id: string, patch: Partial<Session>) {
+    sessions = sessions.map((item) => (item.id === id ? { ...item, ...patch } : item))
+  }
+
+  function modelKey(model: ModelInfo) {
+    return `${model.provider}${MODEL_SEPARATOR}${model.id}`
+  }
+
+  function modelGroups(list: ModelInfo[]) {
+    const groups: Array<{ provider: string; items: ModelInfo[] }> = []
+    for (const model of list) {
+      const group = groups.find((item) => item.provider === model.provider)
+      if (group) group.items.push(model)
+      else groups.push({ provider: model.provider, items: [model] })
+    }
+    return groups
+  }
+
+  // 无会话记忆时回退到模型列表第一项
+  function modelChoice(list: ModelInfo[], records: Session[], id: string) {
+    const remembered = records.find((item) => item.id === id)?.model
+    if (remembered && list.some((model) => modelKey(model) === remembered)) return remembered
+    return list.length ? modelKey(list[0]) : ''
+  }
+
+  function thinkingChoice(records: Session[], id: string) {
+    return records.find((item) => item.id === id)?.thinking ?? DEFAULT_THINKING
+  }
+
+  async function chooseModel(event: Event) {
+    const value = (event.currentTarget as HTMLSelectElement).value
+    if (!value || !sidecarReady) return
+    const [provider, modelId] = value.split(MODEL_SEPARATOR)
+    remember(activeSessionId, { model: value })
+    const result = await request('set_model', { sessionId: activeSessionId, provider, modelId }) as { provider: string; id: string; thinkingLevel?: string } | null
+    if (result) remember(activeSessionId, { model: `${result.provider}${MODEL_SEPARATOR}${result.id}`, thinking: result.thinkingLevel ?? thinkingChoice(sessions, activeSessionId) })
+    else remember(activeSessionId, { model: undefined })
+  }
+
+  async function chooseThinking(event: Event) {
+    const value = (event.currentTarget as HTMLSelectElement).value
+    if (!value || !sidecarReady) return
+    remember(activeSessionId, { thinking: value })
+    const result = await request('set_thinking', { sessionId: activeSessionId, level: value }) as { level?: string } | null
+    // setThinkingLevel 会按模型能力 clamp，以 sidecar 回传的实际档位为准
+    remember(activeSessionId, { thinking: result?.level })
   }
 
   function request(type: string, payload = {}) {
@@ -85,6 +141,8 @@
     try {
       await request('init', { cwd: '.' })
       sidecarReady = true
+      models = (await request('list_models') as ModelInfo[]) ?? []
+      modelCount = models.length
       await loadFiles()
       await refreshGit()
       const loaded = await request('list_sessions', { cwd: '.' }) as Array<{ id: string; title: string; file: string; modifiedAt: number }>
@@ -289,7 +347,7 @@
         <div class="composer-wrap">
           <div class="composer">
             <textarea bind:value={inputText} on:keydown={handleKeydown} placeholder="输入消息…  使用 @ 引用文件，/ 执行命令" rows="2"></textarea>
-            <div class="composer-toolbar"><div class="composer-left"><button>＋</button><button>⌘ GLM 5.2 <span>⌄</span></button><button>思考：高 <span>⌄</span></button></div><div class="composer-right"><span class="hint">Enter 插话 · Alt+Enter 排队</span><button class:stop={runState[activeSessionId]?.running} class="send" on:click={runState[activeSessionId]?.running ? stop : () => submit('steer')}>{runState[activeSessionId]?.running ? '停止' : '发送'} <span>{runState[activeSessionId]?.running ? '■' : '↑'}</span></button></div></div>
+            <div class="composer-toolbar"><div class="composer-left"><button>＋</button><select class="picker" aria-label="模型" disabled={!models.length} value={modelChoice(models, sessions, activeSessionId)} on:change={chooseModel}>{#each modelGroups(models) as group (group.provider)}<optgroup label={group.provider}>{#each group.items as model (modelKey(model))}<option value={modelKey(model)}>{model.name}</option>{/each}</optgroup>{/each}</select><select class="picker" aria-label="思考档位" disabled={!sidecarReady} value={thinkingChoice(sessions, activeSessionId)} on:change={chooseThinking}>{#each THINKING_LEVELS as level (level)}<option value={level}>思考：{THINKING_LABELS[level] ?? level}</option>{/each}</select></div><div class="composer-right"><span class="hint">Enter 插话 · Alt+Enter 排队</span><button class:stop={runState[activeSessionId]?.running} class="send" on:click={runState[activeSessionId]?.running ? stop : () => submit('steer')}>{runState[activeSessionId]?.running ? '停止' : '发送'} <span>{runState[activeSessionId]?.running ? '■' : '↑'}</span></button></div></div>
           </div>
           <div class="composer-note">Pi Agent 可以读取和修改当前工作区中的文件</div>
         </div>
