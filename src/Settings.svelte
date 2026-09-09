@@ -3,6 +3,7 @@
   import { version } from '../package.json'
 
   type ProviderInfo = { provider: string; modelCount: number; configured: boolean }
+  type UsageStats = { sessions: number; turns: number; activeDays: number; totals: { input: number; output: number; cacheRead: number; cacheWrite: number; total: number }; costUsd: number; costKnown: boolean; byModel: Array<{ model: string; tokens: number; turns: number }> }
   type SettingsInfo = { node: string; sdk: string; agentDir: string; sessionDir: string; authProviders: string[]; providers?: ProviderInfo[] }
 
   export let open = false
@@ -14,12 +15,15 @@
   export let onChooseWorkspace: (() => void) | undefined = undefined
   export let onOpenRepo: (() => void) | undefined = undefined
   export let providers: ProviderInfo[] | undefined = undefined
+  export let usageStats: UsageStats | null = null
   export let onRefreshProviders: (() => void) | undefined = undefined
+  export let onRefreshUsage: (() => void) | undefined = undefined
 
-  type Tab = 'general' | 'models' | 'about'
+  type Tab = 'general' | 'models' | 'usage' | 'about'
   const TABS: Array<[Tab, string]> = [
     ['general', '通用'],
     ['models', '模型'],
+    ['usage', '用量'],
     ['about', '关于']
   ]
 
@@ -79,6 +83,13 @@
     else next.add(provider)
     hiddenProviders = [...next]
     localStorage.setItem(HIDDEN_PROVIDERS_KEY, JSON.stringify(hiddenProviders))
+  }
+
+  function formatTokens(value: number) {
+    if (!value) return '0'
+    if (value >= 1000000) return `${(value / 1000000).toFixed(1)}M`
+    if (value >= 1000) return `${(value / 1000).toFixed(1)}K`
+    return String(Math.round(value))
   }
 
   function workspaceBase() {
@@ -150,6 +161,24 @@
                 {/each}
               </div>
               <p class="desc">新建终端时使用的默认 shell。</p>
+            </section>
+          {:else if tab === 'usage'}
+            <section class="group usage-group">
+              <div class="section-head"><div><h3>Pi Agent 用量统计</h3><p class="desc">按当前工作区的 Pi 会话统计，不包含 DeepSeek Harness。</p></div><button class="ghost" on:click={() => onRefreshUsage?.()}>刷新</button></div>
+              <div class="usage-cards">
+                <div class="usage-card"><small>总 Token</small><strong>{formatTokens(usageStats?.totals.total ?? 0)}</strong><span>输入 {formatTokens(usageStats?.totals.input ?? 0)}</span></div>
+                <div class="usage-card"><small>会话数</small><strong>{usageStats?.sessions ?? 0}</strong><span>活跃 {usageStats?.activeDays ?? 0} 天</span></div>
+                <div class="usage-card"><small>对话轮次</small><strong>{usageStats?.turns ?? 0}</strong><span>当前工作区</span></div>
+                <div class="usage-card"><small>费用估算</small><strong>{usageStats?.costKnown ? `$${(usageStats.costUsd ?? 0).toFixed(2)}` : '—'}</strong><span>{usageStats?.costKnown ? '按模型费率' : '暂无费率数据'}</span></div>
+              </div>
+            </section>
+            <section class="group">
+              <h3>模型用量</h3>
+              {#if usageStats?.byModel?.length}
+                <div class="usage-table"><div class="usage-table-head"><span>模型</span><span>Token</span><span>轮次</span></div>{#each usageStats.byModel as item (item.model)}<div class="usage-table-row"><span title={item.model}>{item.model}</span><span>{formatTokens(item.tokens)}</span><span>{item.turns}</span></div>{/each}</div>
+              {:else}
+                <p class="muted">暂无用量记录</p>
+              {/if}
             </section>
           {:else if tab === 'models'}
             <section class="group">
@@ -258,6 +287,20 @@
   .hint-line { flex:1; margin:0; color:#a0a5a0; font-size:10px; }
   .ghost { flex:none; padding:5px 10px; border-radius:6px; background:#eef1ed; color:#596659; font-size:9px; }
   .ghost:hover { background:#e2e7e1; }
+  .usage-group .section-head { align-items:flex-start; }
+  .usage-group .section-head h3 { margin-bottom:3px; }
+  .usage-group .section-head .desc { margin:0; }
+  .usage-cards { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:8px; margin-top:14px; }
+  .usage-card { min-width:0; padding:10px; border:1px solid #e1e4df; border-radius:8px; background:#f7f8f5; }
+  .usage-card small, .usage-card span { display:block; color:#929991; font-size:9px; }
+  .usage-card strong { display:block; margin:5px 0 4px; color:#3d443e; font-size:16px; font-weight:600; }
+  .usage-table { border:1px solid #e1e4df; border-radius:7px; overflow:hidden; }
+  .usage-table-head, .usage-table-row { display:grid; grid-template-columns:minmax(0,1fr) 74px 48px; gap:8px; align-items:center; padding:7px 9px; font-size:10px; }
+  .usage-table-head { background:#f1f3ef; color:#8d958c; font-size:9px; }
+  .usage-table-row { border-top:1px solid #eceeeb; color:#555d55; }
+  .usage-table-row span:first-child { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .usage-table-row span:not(:first-child), .usage-table-head span:not(:first-child) { text-align:right; font-variant-numeric:tabular-nums; }
+  @media (max-width:620px) { .usage-cards { grid-template-columns:repeat(2,minmax(0,1fr)); } }
   .provider-list { display:flex; flex-direction:column; }
   .provider-row { display:flex; align-items:center; gap:10px; min-height:32px; padding:6px 0; border-top:1px solid #f0f2ef; font-size:11px; color:#4c504c; }
   .provider-row:first-child { border-top:0; }

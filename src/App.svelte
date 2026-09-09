@@ -16,6 +16,7 @@
   type RunSlot = { reply: string; thinking: string; tool: string; running: boolean; queue: string[]; sent: SentMessage[]; confirm?: { confirmId: string; toolName: string; summary: string } }
   type SettingsInfo = { node: string; sdk: string; agentDir: string; sessionDir: string; authProviders: string[]; providers?: Array<{ provider: string; modelCount: number; configured: boolean }> }
   type CtxStats = { currentContext: number; window: number; totals: { input: number; output: number; cacheRead: number; cacheWrite: number; total: number }; costUsd: number; cacheHitRate: number }
+  type UsageStats = { sessions: number; turns: number; activeDays: number; totals: { input: number; output: number; cacheRead: number; cacheWrite: number; total: number }; costUsd: number; costKnown: boolean; byModel: Array<{ model: string; tokens: number; turns: number }> }
   const CTX_CIRC = 2 * Math.PI * 7
   const EMPTY_CTX: CtxStats = { currentContext: 0, window: 0, totals: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 }, costUsd: 0, cacheHitRate: 0 }
 
@@ -56,6 +57,7 @@
   let modelSearchInput: HTMLInputElement
   let modelButtonRef: HTMLButtonElement
   let settingsInfo: SettingsInfo | null = null
+  let usageStats: UsageStats | null = null
   let ctxStats: CtxStats = EMPTY_CTX
   let ctxOpen = false
   let ctxMenuUp = false
@@ -70,7 +72,7 @@
   let modeButtonRef: HTMLButtonElement
   let attachments: Array<{ kind: 'image' | 'text'; name: string; mimeType?: string; data?: string; content?: string }> = []
   let attachError = ''
-  let rightWidth = 344
+  let rightWidth = 316
   let sessionMenu: { session: Session; x: number; y: number } | null = null
   let dragging: 'left' | 'right' | null = null
   let dragStartX = 0
@@ -695,12 +697,18 @@
     providers = await request('list_providers', {}) as typeof providers
   }
 
+  async function refreshUsage() {
+    if (!sidecarReady) return
+    try { usageStats = await request('usage_stats', { cwd: workspacePath }) as UsageStats } catch { usageStats = null }
+  }
+
   async function openSettings() {
     showSettings = true
     if (sidecarReady) {
       try {
         settingsInfo = await request('info') as SettingsInfo
         if (settingsInfo?.providers) providers = settingsInfo.providers
+        await refreshUsage()
       } catch {
         settingsInfo = null
       }
@@ -785,13 +793,15 @@
 <div class="desktop">
   <div class="window">
     <header class="titlebar">
-      <div class="brand"><span class="brand-mark">π</span><span>Pi Agent</span></div>
+      <div class="brand"><span class="brand-mark">P</span><span>PI DECK</span></div>
+      <div class="top-session-tab"><span>PiDeck agent</span><span class="top-session-plus">＋</span></div>
       <div class="title-actions">
         <span class="conn-chip" class:connected={sidecarReady}><i></i>{sidecarReady ? '已连接' : ''}</span>
+        <button class="top-more" aria-label="更多选项">⋯</button>
       </div>
     </header>
 
-    <div class="app-grid" style={`grid-template-columns:${showLeft ? 220 : 0}px minmax(430px, 1fr) ${showRight ? rightWidth : 0}px`}>
+    <div class="app-grid" style={`grid-template-columns:${showLeft ? 270 : 0}px minmax(430px, 1fr) ${showRight ? rightWidth : 0}px`}>
       <aside class="sidebar" class:collapsed={!showLeft}>
         <div class="sidebar-actions">
           <button class="sidebar-action" on:click={async () => {
@@ -855,7 +865,7 @@
           <span class="version">v{version}</span>
         </div>
       </aside>
-      <button class="panel-edge-toggle left" class:collapsed={!showLeft} aria-label={showLeft ? '收起左侧栏' : '展开左侧栏'} style={`left:${showLeft ? 207 : 0}px`} on:click={() => (showLeft = !showLeft)}><svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" aria-hidden="true"><rect x="2" y="3" width="12" height="10" rx="1.8"/><line x1={showLeft ? '5.5' : '10.5'} y1="3" x2={showLeft ? '5.5' : '10.5'} y2="13"/></svg></button>
+      <button class="panel-edge-toggle left" class:collapsed={!showLeft} aria-label={showLeft ? '收起左侧栏' : '展开左侧栏'} style={`left:${showLeft ? 257 : 0}px`} on:click={() => (showLeft = !showLeft)}><svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" aria-hidden="true"><rect x="2" y="3" width="12" height="10" rx="1.8"/><line x1={showLeft ? '5.5' : '10.5'} y1="3" x2={showLeft ? '5.5' : '10.5'} y2="13"/></svg></button>
 
       {#if sessionMenu}
         <div class="session-menu-backdrop" role="presentation" on:click={() => (sessionMenu = null)}>
@@ -877,7 +887,7 @@
       {/if}
 
       <main class="chat">
-        <div class="chat-header">
+        <div class="chat-header" class:empty={isIdle(activeSessionId)}>
           <div><h1>{activeSession}</h1><p><span class="online-dot" class:offline={!sidecarReady}></span> Pi Agent · {workspaceBase()}</p></div>
         </div>
 
@@ -986,5 +996,5 @@
     </div>
     <footer class="statusbar"><span title={workspacePath}>{workspaceBase()}</span><span>{statusText()}</span><span>{sessions.length} 个会话 · 保存至 ~/.pi/agent/sessions</span></footer>
   </div>
-  <Settings open={showSettings} connected={sidecarReady} info={settingsInfo} onclose={() => { showSettings = false; loadHiddenProviders() }} openDir={openDir} workspacePath={workspacePath} onChooseWorkspace={chooseWorkspace} onOpenRepo={() => void request('open_url', { url: 'https://github.com/TANGZZee/pi-desktop-next' })} providers={providers} onRefreshProviders={refreshProviders} />
+  <Settings open={showSettings} connected={sidecarReady} info={settingsInfo} usageStats={usageStats} onclose={() => { showSettings = false; loadHiddenProviders() }} openDir={openDir} workspacePath={workspacePath} onChooseWorkspace={chooseWorkspace} onOpenRepo={() => void request('open_url', { url: 'https://github.com/TANGZZee/pi-desktop-next' })} providers={providers} onRefreshProviders={refreshProviders} onRefreshUsage={refreshUsage} />
 </div>

@@ -217,8 +217,56 @@ function sessionStats(entry) {
   }
 }
 
-async function readWorkspaceFile(cwd, file) {
-  const root = path.resolve(cwd)
+async function usageStats(cwd = workspace) {
+  const records = await listSessions(cwd)
+  const totals = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 }
+  const byModel = new Map()
+  const activeDays = new Set()
+  let turns = 0
+  let costUsd = 0
+  let costKnown = false
+
+  for (const record of records) {
+    let lines
+    try { lines = (await readFile(record.file, 'utf8')).split(/\r?\n/) } catch { continue }
+    let sessionHadUsage = false
+    for (const line of lines) {
+      if (!line.trim()) continue
+      let row
+      try { row = JSON.parse(line) } catch { continue }
+      const message = row?.message
+      const usage = message?.role === 'assistant' ? message.usage : null
+      if (!usage) continue
+      sessionHadUsage = true
+      turns += 1
+      if (row.timestamp) activeDays.add(new Date(row.timestamp).toISOString().slice(0, 10))
+      for (const key of ['input', 'output', 'cacheRead', 'cacheWrite']) totals[key] += num(usage[key])
+      totals.total += num(usage.totalTokens)
+      const model = message.model || row.model || '未知模型'
+      const item = byModel.get(model) || { model, tokens: 0, turns: 0 }
+      item.tokens += num(usage.totalTokens)
+      item.turns += 1
+      byModel.set(model, item)
+      if (usage.cost && typeof usage.cost === 'object') {
+        const amount = num(usage.cost.total ?? usage.cost.totalCost)
+        if (amount) { costUsd += amount; costKnown = true }
+      }
+    }
+    if (sessionHadUsage) activeDays.add(new Date(record.modifiedAt).toISOString().slice(0, 10))
+  }
+
+  return {
+    sessions: records.length,
+    turns,
+    activeDays: activeDays.size,
+    totals,
+    costUsd,
+    costKnown,
+    byModel: [...byModel.values()].sort((a, b) => b.tokens - a.tokens),
+  }
+}
+
+async function readWorkspaceFile(cwd, file) {  const root = path.resolve(cwd)
   const absolute = path.resolve(root, file)
   if (absolute !== root && !absolute.startsWith(`${root}${path.sep}`)) throw new Error('禁止读取工作区外的文件')
   const info = await stat(absolute)
@@ -382,6 +430,10 @@ async function handle(request) {
     }
     if (type === 'list_sessions') {
       reply(id, await listSessions(payload.cwd || workspace))
+      return
+    }
+    if (type === 'usage_stats') {
+      reply(id, await usageStats(payload.cwd || workspace))
       return
     }
     if (type === 'open_session') {
