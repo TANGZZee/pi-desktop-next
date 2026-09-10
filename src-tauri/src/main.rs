@@ -1,3 +1,3 @@
 fn main() {
-    pi_desktop_next_lib::run()
+    pi_my_lib::run()
 }

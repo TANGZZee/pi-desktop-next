@@ -1,10 +1,10 @@
 [package]
-name = "pi-desktop-next"
+name = "pi-my"
 version = "0.1.0"
 edition = "2021"
 
 [lib]
-name = "pi_desktop_next_lib"
+name = "pi_my_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]

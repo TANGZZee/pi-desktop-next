@@ -2381,7 +2381,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "pi-desktop-next"
+name = "pi-my"
 version = "0.1.0"
 dependencies = [
  "portable-pty",

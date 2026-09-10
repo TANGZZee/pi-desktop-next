@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { createAgentSession, ModelRuntime, SessionManager } from '@earendil-works/pi-coding-agent'
+import { createAgentSession, DefaultPackageManager, ModelRuntime, SessionManager, SettingsManager, VERSION } from '@earendil-works/pi-coding-agent'
 import readline from 'node:readline'
 import os from 'node:os'
 import path from 'node:path'
@@ -10,6 +10,10 @@ import { createRequire } from 'node:module'
 import { DefaultResourceLoader } from '@earendil-works/pi-coding-agent'
 import { DEFAULT_MODE, effectiveToolsForMode, isAgentMode } from './policy.ts'
 import { createApprovalExtension } from './approval-extension.ts'
+import { createRetryExtension } from './retry-no-body.ts'
+import * as piConfig from './config.mjs'
+import * as eco from './ecosystem.mjs'
+import * as lan from './lan.mjs'
 
 const sessions = new Map()
 let runtime
@@ -17,7 +21,7 @@ let workspace = process.cwd()
 const agentDir = path.join(os.homedir(), '.pi', 'agent')
 const execFileAsync = promisify(execFile)
 const require = createRequire(import.meta.url)
-const sdkVersion = require('../package.json').dependencies['@earendil-works/pi-coding-agent']
+const sdkVersion = VERSION
 
 // ask 模式确认桥：扩展 await → UI 回答
 const DEFAULT_TOOLS = ['read', 'bash', 'edit', 'write']
@@ -31,11 +35,34 @@ const confirmBridge = {
   }),
 }
 
+// OAuth 登录桥：把 SDK 的 AuthInteraction 事件/提问转发给 UI（每次登录请求独立，附带 provider）
+const pendingLoginPrompts = new Map()
+let loginPromptSeq = 0
+function createLoginInteraction(provider) {
+  return {
+    notify: (event) => send({ type: 'login_event', provider, event }),
+    prompt: (prompt) => new Promise((resolve, reject) => {
+      const promptId = `lp${++loginPromptSeq}`
+      pendingLoginPrompts.set(promptId, { resolve, reject })
+      send({ type: 'login_prompt', provider, promptId, prompt })
+    }),
+  }
+}
+
+function packageManager() {
+  const settingsManager = SettingsManager.create(workspace, agentDir)
+  return new DefaultPackageManager({ cwd: workspace, agentDir, settingsManager })
+}
+
 function send(message) {
   process.stdout.write(`${JSON.stringify(message)}\n`)
 }
+const logLines = []
 function log(...args) {
-  process.stderr.write(`[pi-sidecar] ${args.join(' ')}\n`)
+  const line = `${new Date().toISOString()} ${args.map((item) => item instanceof Error ? (item.stack || item.message) : String(item)).join(' ')}`
+  logLines.push(line)
+  if (logLines.length > 400) logLines.splice(0, logLines.length - 400)
+  process.stderr.write(`[pi-sidecar] ${line}\n`)
 }
 function reply(id, result, error) {
   send({ type: 'response', id, ok: !error, result, error: error ? String(error?.message ?? error) : undefined })
@@ -53,8 +80,9 @@ function summarizeEvent(event) {
   return copy
 }
 
-async function ensureRuntime() {
-  if (!runtime) runtime = await ModelRuntime.create({ agentDir, refreshOnCreate: false })
+async function ensureRuntime(refresh = false) {
+  if (refresh) runtime = undefined
+  if (!runtime) runtime = await ModelRuntime.create({ agentDir, refreshOnCreate: refresh })
   return runtime
 }
 
@@ -65,7 +93,10 @@ async function createSession(id, cwd = workspace, thinking, mode = DEFAULT_MODE)
   const loader = new DefaultResourceLoader({
     cwd,
     agentDir,
-    extensionFactories: [createApprovalExtension({ getMode: () => entry.mode, sessionId: id, requestConfirm: confirmBridge.requestConfirm })],
+    extensionFactories: [
+      createApprovalExtension({ getMode: () => entry.mode, sessionId: id, requestConfirm: confirmBridge.requestConfirm }),
+      createRetryExtension()
+    ],
   })
   await loader.reload()
   const { session } = await createAgentSession({
@@ -77,7 +108,11 @@ async function createSession(id, cwd = workspace, thinking, mode = DEFAULT_MODE)
     tools: effectiveToolsForMode(entryMode, DEFAULT_TOOLS),
   })
   if (thinking) session.setThinkingLevel(thinking)
-  const unsubscribe = session.subscribe((event) => send({ type: 'event', sessionId: id, event: summarizeEvent(event) }))
+  const unsubscribe = session.subscribe((event) => {
+    const summarized = summarizeEvent(event)
+    lan.note(id, summarized)
+    send({ type: 'event', sessionId: id, event: summarized })
+  })
   Object.assign(entry, { session, unsubscribe, cwd })
   sessions.set(id, entry)
   return { id, sessionId: session.sessionId, cwd, file: session.sessionManager.getSessionFile(), mode: entry.mode }
@@ -87,7 +122,11 @@ async function openSession(id, file) {
   const modelRuntime = await ensureRuntime()
   const sessionManager = SessionManager.open(file)
   const { session } = await createAgentSession({ cwd: sessionManager.getCwd() || workspace, agentDir, modelRuntime, sessionManager })
-  const unsubscribe = session.subscribe((event) => send({ type: 'event', sessionId: id, event: summarizeEvent(event) }))
+  const unsubscribe = session.subscribe((event) => {
+    const summarized = summarizeEvent(event)
+    lan.note(id, summarized)
+    send({ type: 'event', sessionId: id, event: summarized })
+  })
   sessions.set(id, { session, unsubscribe, cwd: sessionManager.getCwd() || workspace, file })
   return { id, sessionId: session.sessionId, cwd: sessionManager.getCwd() || workspace, file }
 }
@@ -164,7 +203,7 @@ function openDirectory(target) {
 }
 
 // 仓库地址硬编码，忽略客户端传入的 url，防止注入任意命令。
-const REPO_URL = 'https://github.com/TANGZZee/pi-desktop-next'
+const REPO_URL = 'https://github.com/TANGZZee/pi-my'
 
 function openUrl(url) {
   try {
@@ -221,6 +260,8 @@ async function usageStats(cwd = workspace) {
   const records = await listSessions(cwd)
   const totals = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 }
   const byModel = new Map()
+  const byDay = new Map()
+  const byProject = new Map()
   const activeDays = new Set()
   let turns = 0
   let costUsd = 0
@@ -239,9 +280,18 @@ async function usageStats(cwd = workspace) {
       if (!usage) continue
       sessionHadUsage = true
       turns += 1
-      if (row.timestamp) activeDays.add(new Date(row.timestamp).toISOString().slice(0, 10))
+      const day = row.timestamp ? new Date(row.timestamp).toISOString().slice(0, 10) : ''
+      if (day) {
+        activeDays.add(day)
+        byDay.set(day, (byDay.get(day) ?? 0) + num(usage.totalTokens))
+      }
       for (const key of ['input', 'output', 'cacheRead', 'cacheWrite']) totals[key] += num(usage[key])
       totals.total += num(usage.totalTokens)
+      const project = path.basename(record.cwd || cwd || '.')
+      const projectItem = byProject.get(project) || { project, tokens: 0, turns: 0 }
+      projectItem.tokens += num(usage.totalTokens)
+      projectItem.turns += 1
+      byProject.set(project, projectItem)
       const model = message.model || row.model || '未知模型'
       const item = byModel.get(model) || { model, tokens: 0, turns: 0 }
       item.tokens += num(usage.totalTokens)
@@ -263,6 +313,8 @@ async function usageStats(cwd = workspace) {
     costUsd,
     costKnown,
     byModel: [...byModel.values()].sort((a, b) => b.tokens - a.tokens),
+    byProject: [...byProject.values()].sort((a, b) => b.tokens - a.tokens),
+    byDay: Object.fromEntries([...byDay.entries()].sort((a, b) => a[0].localeCompare(b[0]))),
   }
 }
 
@@ -342,6 +394,7 @@ async function handle(request) {
   try {
     if (type === 'init') {
       workspace = payload.cwd || workspace
+      piConfig.applyAgentProxy(await piConfig.readProxy(agentDir))
       await ensureRuntime()
       reply(id, { ready: true, cwd: workspace, agentDir })
       return
@@ -374,7 +427,7 @@ async function handle(request) {
       return
     }
     if (type === 'list_models') {
-      const models = (await ensureRuntime()).getModels().map((model) => ({ provider: model.provider, id: model.id, name: model.name, reasoning: model.reasoning }))
+      const models = (await ensureRuntime()).getModels().map((model) => ({ provider: model.provider, id: model.id, name: model.name, reasoning: model.reasoning, contextWindow: model.contextWindow, maxTokens: model.maxTokens }))
       reply(id, models)
       return
     }
@@ -544,6 +597,190 @@ async function handle(request) {
         resolve(false)
       }
       reply(id, { aborted: true })
+      return
+    }
+    if (type === 'config_read') {
+      reply(id, await piConfig.readConfigFile(agentDir, payload.file))
+      return
+    }
+    if (type === 'config_write') {
+      reply(id, await piConfig.writeConfigFile(agentDir, payload.file, payload.raw))
+      await ensureRuntime(true)
+      return
+    }
+    if (type === 'config_cards') {
+      const { providers, auth } = await piConfig.loadModelsAuth(agentDir)
+      const catalog = (await ensureRuntime()).getModels().map((model) => ({
+        provider: model.provider, id: model.id, name: model.name, reasoning: model.reasoning,
+        contextWindow: model.contextWindow, maxTokens: model.maxTokens
+      }))
+      reply(id, piConfig.providerCards(providers, auth, catalog))
+      return
+    }
+    if (type === 'refresh_models') {
+      const models = (await ensureRuntime(true)).getModels().map((model) => ({
+        provider: model.provider, id: model.id, name: model.name, reasoning: model.reasoning,
+        contextWindow: model.contextWindow, maxTokens: model.maxTokens
+      }))
+      reply(id, { models, providers: await providerSummary() })
+      return
+    }
+    if (type === 'test_provider') {
+      const proxy = await piConfig.readProxy(agentDir)
+      const url = proxy.desktop?.mode === 'on' ? proxy.desktop.url : ''
+      reply(id, await piConfig.testProvider(agentDir, payload.provider, url, payload))
+      return
+    }
+    if (type === 'fetch_models') {
+      const proxy = await piConfig.readProxy(agentDir)
+      const url = proxy.desktop?.mode === 'on' ? proxy.desktop.url : ''
+      reply(id, await piConfig.fetchProviderModels(payload.baseUrl, payload.apiKey, url))
+      return
+    }
+    if (type === 'fetch_balance') {
+      const proxy = await piConfig.readProxy(agentDir)
+      const url = proxy.desktop?.mode === 'on' ? proxy.desktop.url : ''
+      reply(id, await piConfig.fetchProviderBalance(agentDir, payload, url))
+      return
+    }
+    if (type === 'lookup_model_hints') {
+      const proxy = await piConfig.readProxy(agentDir)
+      const url = proxy.desktop?.mode === 'on' ? proxy.desktop.url : ''
+      reply(id, await piConfig.lookupModelHints(agentDir, payload.ids || [], url))
+      return
+    }
+    if (type === 'proxy_get') {
+      reply(id, await piConfig.readProxy(agentDir))
+      return
+    }
+    if (type === 'proxy_set') {
+      reply(id, await piConfig.writeProxy(agentDir, payload))
+      return
+    }
+    if (type === 'usage_probes_get') {
+      reply(id, await piConfig.readProbes(agentDir))
+      return
+    }
+    if (type === 'usage_probes_save') {
+      reply(id, await piConfig.saveProbes(agentDir, payload.providers))
+      return
+    }
+    if (type === 'usage_probe') {
+      const proxy = await piConfig.readProxy(agentDir)
+      const url = proxy.desktop?.mode === 'on' ? proxy.desktop.url : ''
+      reply(id, await piConfig.runProbe(agentDir, payload.provider, url))
+      return
+    }
+    if (type === 'eco_list') {
+      reply(id, await eco.listEco(agentDir, payload.cwd || workspace))
+      return
+    }
+    if (type === 'eco_toggle') {
+      reply(id, await eco.toggleEco(payload.path, payload.enable))
+      return
+    }
+    if (type === 'eco_search_prompts') {
+      reply(id, await eco.searchPrompts(payload.query))
+      return
+    }
+    if (type === 'eco_search_skills') {
+      reply(id, await eco.searchSkillsHub(payload.query))
+      return
+    }
+    if (type === 'eco_search_extensions') {
+      reply(id, await eco.searchExtensions(payload.query))
+      return
+    }
+    if (type === 'eco_xue') {
+      reply(id, eco.searchXue(payload.query, payload.category, payload.page))
+      return
+    }
+    if (type === 'eco_install_prompt') {
+      reply(id, await eco.installPrompt(agentDir, payload.item))
+      return
+    }
+    if (type === 'eco_install_skill') {
+      reply(id, await eco.installSkill(agentDir, payload.cwd || workspace, payload.item, payload.scope))
+      return
+    }
+    if (type === 'eco_install_imagegen') {
+      reply(id, await eco.installImageGenSkill(agentDir))
+      return
+    }
+    if (type === 'eco_install_package') {
+      const name = String(payload.name || '').trim()
+      if (!name) throw new Error('包名不能为空')
+      try {
+        await packageManager().installAndPersist(`npm:${name}`)
+        reply(id, { ok: true, name, message: '已安装' })
+      } catch (error) {
+        reply(id, { ok: false, name, message: error.message || '安装失败' })
+      }
+      return
+    }
+    if (type === 'eco_refresh') {
+      await ensureRuntime(true)
+      reply(id, { refreshed: true })
+      return
+    }
+    if (type === 'eco_uninstall_package') {
+      const name = String(payload.name || '').trim()
+      if (!name) throw new Error('包名不能为空')
+      try {
+        await packageManager().removeAndPersist(`npm:${name}`)
+        reply(id, { ok: true, name, message: '已移除' })
+      } catch (error) {
+        reply(id, { ok: false, name, message: error.message || '移除失败' })
+      }
+      return
+    }
+    if (type === 'vision_get') {
+      reply(id, await eco.readVision(agentDir))
+      return
+    }
+    if (type === 'vision_set') {
+      reply(id, await eco.writeVision(agentDir, payload))
+      return
+    }
+    if (type === 'vision_describe') {
+      reply(id, await eco.describeImage(agentDir, payload))
+      return
+    }
+    if (type === 'lan_status') {
+      reply(id, lan.status())
+      return
+    }
+    if (type === 'lan_set') {
+      lan.setSnapshot(() => ({
+        workspace,
+        sessions: [...sessions.keys()].map((sid) => ({ id: sid, title: sid }))
+      }))
+      reply(id, payload.enabled ? lan.start(Number(payload.port) || 18787) : lan.stop())
+      return
+    }
+    if (type === 'log_tail') {
+      reply(id, { lines: logLines.slice(-(Number(payload.limit) || 200)) })
+      return
+    }
+    if (type === 'oauth_login') {
+      const provider = String(payload.provider || '').trim()
+      if (!provider) throw new Error('缺少 provider')
+      try {
+        const credential = await (await ensureRuntime()).login(provider, 'oauth', createLoginInteraction(provider))
+        reply(id, { ok: true, provider, message: `已登录 ${provider}` })
+        await ensureRuntime(true)
+      } catch (error) {
+        reply(id, { ok: false, provider, message: error.message || '登录失败' })
+      }
+      return
+    }
+    if (type === 'login_prompt_response') {
+      const pending = pendingLoginPrompts.get(payload.promptId)
+      pendingLoginPrompts.delete(payload.promptId)
+      if (!pending) { reply(id, { delivered: false }); return }
+      if (payload.cancelled) pending.reject(new Error('用户取消登录'))
+      else pending.resolve(String(payload.value ?? ''))
+      reply(id, { delivered: true })
       return
     }
     throw new Error(`未知 sidecar 请求: ${type}`)
