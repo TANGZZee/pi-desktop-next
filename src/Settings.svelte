@@ -4,7 +4,7 @@
   import { loadPrefs, patchPrefs, type Prefs, type Density, type SendShortcut, type BusySend, type ModePref, type ThemePref } from './prefs'
   import { loadAgents, removeAgent, upsertAgent, type AgentDef } from './agents'
   import { SKINS, type SkinId } from './skins'
-  import { PETS, petPreviewUrl } from './pets'
+  import { PETS, petPreviewUrl, type PetModel } from './pets'
   import ConfigPane from './ConfigPane.svelte'
 
   type ProviderInfo = { provider: string; modelCount: number; configured: boolean }
@@ -244,7 +244,7 @@
     }
   }
 
-  async function downloadPet(pet: { id: string; name: string; repo: string; branch: string; dir: string; modelFile: string }) {
+  async function downloadPet(pet: PetModel) {
     petNotice = '下载中…'
     try {
       const result = await rpc?.('eco_download_pet', { pet }) as { id?: string; count?: number; dir?: string }
@@ -727,7 +727,7 @@
                 {#each PETS as pet (pet.id)}
                   <div class="pet-card" class:on={prefs.petModel === pet.id} role="button" tabindex="0" on:click={() => commit({ petModel: pet.id })} on:keydown={(event) => { if (event.key === 'Enter') commit({ petModel: pet.id }) }}>
                     <span class="pet-thumb"><img src={petPreviewUrl(pet)} alt={pet.name} loading="lazy" /></span>
-                    <span class="pet-name">{pet.name}</span>
+                    <span class="pet-name">{pet.name}<em class="pet-type">{pet.type === 'sprite' ? '精灵' : 'Live2D'}</em></span>
                     <small>{pet.description}</small>
                     <span class="pet-actions">
                       <button class="ghost" on:click={() => void downloadPet(pet)}>下载缓存</button>
@@ -878,6 +878,7 @@
   .pet-thumb { display: grid; place-items: center; height: 120px; overflow: hidden; border-radius: 6px; background: var(--surface-2); }
   .pet-thumb img { display: block; max-width: 100%; max-height: 100%; object-fit: contain; }
   .pet-name { color: var(--text); font-size: 12px; font-weight: 600; }
+  .pet-type { margin-left: 6px; padding: 1px 5px; border: 1px solid var(--border); border-radius: 999px; color: var(--muted); font-size: 9px; font-style: normal; font-weight: 400; vertical-align: 1px; }
   .pet-card small { color: var(--muted); font-size: 10px; }
   .pet-actions { display: flex; margin-top: 2px; }
   .pet-actions .ghost { padding: 4px 8px; font-size: 10px; }

@@ -259,6 +259,24 @@ export function searchXue(query, category, page = 1) {
 }
 
 export async function downloadPet(agentDir, pet) {
+  if (pet?.type === 'sprite') return downloadSpritePet(agentDir, pet)
+  return downloadLive2DPet(agentDir, pet)
+}
+
+async function downloadSpritePet(agentDir, pet) {
+  const id = String(pet?.id || 'pet')
+  const spriteUrl = String(pet?.spriteUrl || '')
+  if (!spriteUrl) throw new Error('精灵图 URL 缺失')
+  const base = path.join(agentDir, 'pets', id)
+  await mkdir(base, { recursive: true })
+  const resp = await fetch(spriteUrl, { signal: AbortSignal.timeout(120000) })
+  if (!resp.ok) throw new Error(`下载失败 HTTP ${resp.status}`)
+  await writeFile(path.join(base, 'sprite.webp'), Buffer.from(await resp.arrayBuffer()))
+  await writeFile(path.join(base, 'pet.json'), JSON.stringify({ id, displayName: pet?.name || id, description: pet?.description || '', spritesheetPath: 'sprite.webp' }, null, 2))
+  return { id, dir: base, count: 2, model: path.join(base, 'pet.json'), sprite: 'sprite.webp' }
+}
+
+async function downloadLive2DPet(agentDir, pet) {
   const repo = String(pet?.repo || '')
   const branch = String(pet?.branch || 'master')
   const dir = String(pet?.dir || '')
@@ -292,6 +310,15 @@ export async function listPets(agentDir, base) {
     for (const entry of await readdir(root, { withFileTypes: true })) {
       if (!entry.isDirectory() || entry.name.startsWith('.')) continue
       const dir = path.join(root, entry.name)
+      // sprite：pet.json
+      try {
+        const manifest = JSON.parse(await readFile(path.join(dir, 'pet.json'), 'utf8'))
+        if (manifest.spritesheetPath) {
+          pets.push({ id: entry.name, sprite: manifest.spritesheetPath })
+          continue
+        }
+      } catch { /* 非 sprite */ }
+      // live2d：递归找 model3.json / model.json
       const files = []
       async function walk(d) {
         for (const e of await readdir(d, { withFileTypes: true })) {
@@ -302,7 +329,7 @@ export async function listPets(agentDir, base) {
       }
       await walk(dir)
       const model = files.find((f) => f.endsWith('.model3.json') || f.endsWith('.model.json'))
-      pets.push({ id: entry.name, model: model || null })
+      if (model) pets.push({ id: entry.name, model })
     }
   } catch { /* 还没下载过桌宠 */ }
   return { base, pets }

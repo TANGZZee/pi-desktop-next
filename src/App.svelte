@@ -10,6 +10,7 @@
   import MarkdownView from './MarkdownView.svelte'
   import Pet from './Pet.svelte'
   import Live2DPet from './Live2DPet.svelte'
+  import SpritePet from './SpritePet.svelte'
   import { petById, petModelUrl } from './pets'
   import { version } from '../package.json'
   import logoUrl from './assets/pi-my-logo.png'
@@ -53,7 +54,7 @@
   type LoginPrompt = { promptId: string; type: string; message: string; placeholder?: string; options?: Array<{ id: string; label: string }> }
   type LoginState = { provider: string; status: string; userCode?: string; verificationUri?: string; prompt?: LoginPrompt; value: string }
   let loginState: LoginState | null = null
-  let petStatus: { base: string; pets: Array<{ id: string; model: string | null }> } = { base: '', pets: [] }
+  let petStatus: { base: string; pets: Array<{ id: string; model?: string | null; sprite?: string }> } = { base: '', pets: [] }
   let workspacePath = '.'
   let files: Array<{ path: string; kind: 'file' | 'directory' }> = []
   let selectedFile = ''
@@ -1025,6 +1026,10 @@
     const pet = petById(uiPrefs.petModel)
     if (!pet) return ''
     const local = petStatus.pets.find((item) => item.id === pet.id)
+    if (pet.type === 'sprite') {
+      if (local && petStatus.base) return `${petStatus.base}/${pet.id}/${local.sprite || 'sprite.webp'}`
+      return pet.spriteUrl || pet.preview
+    }
     if (local?.model && petStatus.base) return `${petStatus.base}/${local.model}`
     return petModelUrl(pet)
   }
@@ -1779,7 +1784,11 @@
   {#if uiPrefs.petEnabled}
     {#if uiPrefs.petModel && petById(uiPrefs.petModel)}
       {#key currentPetUrl()}
-        <Live2DPet enabled url={currentPetUrl()} />
+        {#if petById(uiPrefs.petModel)?.type === 'sprite'}
+          <SpritePet enabled url={currentPetUrl()} />
+        {:else}
+          <Live2DPet enabled url={currentPetUrl()} />
+        {/if}
       {/key}
     {:else}
       <Pet enabled />
