@@ -82,17 +82,32 @@ fn runtime_cwd(script: &Path) -> PathBuf {
     script.parent().unwrap_or(Path::new(".")).to_path_buf()
 }
 
+fn pathdiff_from(base: &Path, target: &Path) -> String {
+    target
+        .strip_prefix(base)
+        .map(|path| path.to_path_buf())
+        .unwrap_or_else(|_| target.to_path_buf())
+        .to_string_lossy()
+        .replace('\\', "/")
+}
+
 fn spawn_sidecar(app: &tauri::AppHandle) -> Result<Sidecar, String> {
     let script = resolve_sidecar_script(app)?;
     let node = resolve_node(&script);
     let cwd = runtime_cwd(&script);
+    let script_arg = pathdiff_from(&cwd, &script);
     let mut command = std::process::Command::new(&node);
     command
-        .arg(&script)
+        .arg(&script_arg)
         .current_dir(&cwd)
         .env("NODE_PATH", cwd.join("node_modules"))
         .stdin(Stdio::piped())
         .stdout(Stdio::piped());
+    if let Ok(log_dir) = app.path().app_log_dir() {
+        let _ = std::fs::create_dir_all(&log_dir);
+        let debug = format!("node={node:?}\nscript={script:?}\nscript_arg={script_arg:?}\ncwd={cwd:?}\n");
+        let _ = std::fs::write(log_dir.join("sidecar-spawn.txt"), debug);
+    }
     if let Ok(log_dir) = app.path().app_log_dir() {
         let _ = std::fs::create_dir_all(&log_dir);
         if let Ok(file) = std::fs::File::create(log_dir.join("sidecar.log")) {
