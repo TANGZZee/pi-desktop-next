@@ -4,6 +4,7 @@
   import { loadPrefs, patchPrefs, type Prefs, type Density, type SendShortcut, type BusySend, type ModePref, type ThemePref } from './prefs'
   import { loadAgents, removeAgent, upsertAgent, type AgentDef } from './agents'
   import { SKINS, type SkinId } from './skins'
+  import { PETS, petPreviewUrl } from './pets'
   import ConfigPane from './ConfigPane.svelte'
 
   type ProviderInfo = { provider: string; modelCount: number; configured: boolean }
@@ -75,6 +76,7 @@
   let xueCategory = ''
   let vision = { enabled: false, provider: '', model: '', baseUrl: '', apiKey: '', promptTemplate: '' }
   let ecoNotice = ''
+  let petNotice = ''
   let lanStatus: { enabled?: boolean; port?: number | null; urls?: string[]; clients?: number } | null = null
   let lanBusy = false
   let logLines: string[] = []
@@ -239,6 +241,17 @@
       void rpc?.('eco_refresh', {})
     } catch (error) {
       ecoNotice = error instanceof Error ? error.message : '移除失败'
+    }
+  }
+
+  async function downloadPet(pet: { id: string; name: string; repo: string; branch: string; dir: string; modelFile: string }) {
+    petNotice = '下载中…'
+    try {
+      const result = await rpc?.('eco_download_pet', { pet }) as { id?: string; count?: number; dir?: string }
+      petNotice = `已下载 ${pet.name}（${result?.count ?? 0} 个文件）到本地缓存，重启后离线可用。`
+      onPrefsChange()
+    } catch (error) {
+      petNotice = error instanceof Error ? error.message : '下载失败'
     }
   }
 
@@ -704,7 +717,27 @@
                 <input type="checkbox" checked={prefs.petEnabled} on:change={(event) => commit({ petEnabled: (event.currentTarget as HTMLInputElement).checked })} />
                 <span>在窗口右下角显示桌宠</span>
               </label>
-              <p class="desc">点击会跳一下。深色主题自动反色。灵感来自 PiDeck 桌宠 / Percho UI 插件，这边先做轻量一只。</p>
+              <p class="desc">Live2D 模型来自公开模型库，点击可互动；下载后缓存在本地。深色主题下依旧清晰。</p>
+            </section>
+            <section class="group">
+              <h3>选择桌宠</h3>
+              <div class="choice-row" style="margin-bottom:12px">
+                <button class="choice" class:on={!prefs.petModel} on:click={() => commit({ petModel: '' })}>默认（像素猫）</button>
+              </div>
+              <div class="pet-grid">
+                {#each PETS as pet (pet.id)}
+                  <div class="pet-card" class:on={prefs.petModel === pet.id} role="button" tabindex="0" on:click={() => commit({ petModel: pet.id })} on:keydown={(event) => { if (event.key === 'Enter') commit({ petModel: pet.id }) }}>
+                    <span class="pet-thumb"><img src={petPreviewUrl(pet)} alt={pet.name} loading="lazy" /></span>
+                    <span class="pet-name">{pet.name}</span>
+                    <small>{pet.description}</small>
+                    <span class="pet-actions">
+                      <button class="ghost" on:click={() => void downloadPet(pet)}>下载缓存</button>
+                    </span>
+                  </div>
+                {/each}
+              </div>
+              {#if petNotice}<p class="desc">{petNotice}</p>{/if}
+              <p class="desc">模型文件较大，首次「使用」会从 CDN 加载；点「下载缓存」后离线也能用。</p>
             </section>
           {:else if tab === 'lan'}
             <section class="group">
@@ -840,6 +873,15 @@
   .skin-swatch i { display: block; border-radius: 2px; }
   .skin-swatch i:nth-child(1) { grid-row: 1 / 3; }
   .skin-swatch i:nth-child(3) { grid-row: 1 / 3; }
+  .pet-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; }
+  .pet-card { display: flex; flex-direction: column; align-items: stretch; gap: 4px; padding: 8px; border: 1px solid var(--border); border-radius: 8px; background: var(--raised); text-align: left; }
+  .pet-card.on { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+  .pet-thumb { display: grid; place-items: center; height: 120px; overflow: hidden; border-radius: 6px; background: var(--surface-2); }
+  .pet-thumb img { display: block; max-width: 100%; max-height: 100%; object-fit: contain; }
+  .pet-name { color: var(--text); font-size: 12px; font-weight: 600; }
+  .pet-card small { color: var(--muted); font-size: 10px; }
+  .pet-actions { display: flex; margin-top: 2px; }
+  .pet-actions .ghost { padding: 4px 8px; font-size: 10px; }
   .keys { display: grid; gap: 2px; }
   .key-row { display: flex; align-items: center; justify-content: space-between; min-height: 32px; padding: 0 2px; border-bottom: 1px solid var(--surface-3); color: var(--text-2); font-size: 12px; }
   kbd { padding: 3px 7px; border: 1px solid var(--border-2); border-radius: 4px; background: var(--surface-3); color: var(--text-2); font: 11px ui-monospace, "Cascadia Mono", monospace; }

@@ -258,6 +258,56 @@ export function searchXue(query, category, page = 1) {
   return { categories, total, page, perPage, items, note: '内置精选。完整 XuePrompt 库未打包，可同时搜 prompts.chat。' }
 }
 
+export async function downloadPet(agentDir, pet) {
+  const repo = String(pet?.repo || '')
+  const branch = String(pet?.branch || 'master')
+  const dir = String(pet?.dir || '')
+  const petId = String(pet?.id || dir.split('/').pop() || 'pet')
+  if (!repo || !dir) throw new Error('模型信息不完整')
+  const treeUrl = `https://api.github.com/repos/${repo}/git/trees/${branch}?recursive=1`
+  const treeResp = await fetch(treeUrl, { signal: AbortSignal.timeout(30000), headers: { 'User-Agent': 'pi-my', Accept: 'application/vnd.github+json' } })
+  if (!treeResp.ok) throw new Error(`列目录失败 HTTP ${treeResp.status}`)
+  const tree = await treeResp.json()
+  const files = (Array.isArray(tree.tree) ? tree.tree : []).filter((entry) => entry.type === 'blob' && entry.path.startsWith(`${dir}/`))
+  if (!files.length) throw new Error('未找到模型文件')
+  const base = path.join(agentDir, 'pets', petId)
+  await mkdir(base, { recursive: true })
+  for (const f of files) {
+    const rel = f.path.slice(dir.length + 1)
+    const url = `https://cdn.jsdelivr.net/gh/${repo}@${branch}/${f.path.split('/').map(encodeURIComponent).join('/')}`
+    const resp = await fetch(url, { signal: AbortSignal.timeout(120000) })
+    if (!resp.ok) continue
+    const target = path.join(base, rel)
+    await mkdir(path.dirname(target), { recursive: true })
+    await writeFile(target, Buffer.from(await resp.arrayBuffer()))
+  }
+  const modelFile = files.find((f) => f.path.endsWith('.model3.json') || f.path.endsWith('.model.json'))
+  return { id: petId, dir: base, count: files.length, model: modelFile ? path.join(base, modelFile.path.slice(dir.length + 1)) : null }
+}
+
+export async function listPets(agentDir, base) {
+  const root = path.join(agentDir, 'pets')
+  const pets = []
+  try {
+    for (const entry of await readdir(root, { withFileTypes: true })) {
+      if (!entry.isDirectory() || entry.name.startsWith('.')) continue
+      const dir = path.join(root, entry.name)
+      const files = []
+      async function walk(d) {
+        for (const e of await readdir(d, { withFileTypes: true })) {
+          const full = path.join(d, e.name)
+          if (e.isDirectory()) await walk(full)
+          else files.push(path.relative(root, full).replaceAll('\\', '/'))
+        }
+      }
+      await walk(dir)
+      const model = files.find((f) => f.endsWith('.model3.json') || f.endsWith('.model.json'))
+      pets.push({ id: entry.name, model: model || null })
+    }
+  } catch { /* 还没下载过桌宠 */ }
+  return { base, pets }
+}
+
 export async function installPrompt(agentDir, item) {
   const dir = path.join(agentDir, 'prompts')
   await mkdir(dir, { recursive: true })

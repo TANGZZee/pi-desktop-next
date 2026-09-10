@@ -9,6 +9,8 @@
   import Atom from './Atom.svelte'
   import MarkdownView from './MarkdownView.svelte'
   import Pet from './Pet.svelte'
+  import Live2DPet from './Live2DPet.svelte'
+  import { petById, petModelUrl } from './pets'
   import { version } from '../package.json'
   import logoUrl from './assets/pi-my-logo.png'
   import { applyPrefsChrome, loadPrefs, patchPrefs } from './prefs'
@@ -51,6 +53,7 @@
   type LoginPrompt = { promptId: string; type: string; message: string; placeholder?: string; options?: Array<{ id: string; label: string }> }
   type LoginState = { provider: string; status: string; userCode?: string; verificationUri?: string; prompt?: LoginPrompt; value: string }
   let loginState: LoginState | null = null
+  let petStatus: { base: string; pets: Array<{ id: string; model: string | null }> } = { base: '', pets: [] }
   let workspacePath = '.'
   let files: Array<{ path: string; kind: 'file' | 'directory' }> = []
   let selectedFile = ''
@@ -80,6 +83,7 @@
     uiPrefs = loadPrefs()
     applyPrefsChrome()
     loadHiddenProviders()
+    void refreshPetStatus()
   }
   function desktopNotify(title: string, body: string) {
     if (!('Notification' in window) || Notification.permission !== 'granted') return
@@ -874,6 +878,7 @@
       await request('init', { cwd: startupCwd })
       if (startupCwd !== '.') workspacePath = startupCwd
       sidecarReady = true
+      void refreshPetStatus()
       models = (await request('list_models') as ModelInfo[]) ?? []
       await loadFiles()
       await refreshGit()
@@ -1008,6 +1013,20 @@
   function cancelLogin() {
     if (loginState?.prompt) void request('login_prompt_response', { promptId: loginState.prompt.promptId, cancelled: true })
     loginState = null
+  }
+
+  async function refreshPetStatus() {
+    if (!sidecarReady) return
+    try { petStatus = await request('eco_pet_status', {}) as { base: string; pets: Array<{ id: string; model: string | null }> } } catch { petStatus = { base: '', pets: [] } }
+  }
+
+  function currentPetUrl() {
+    if (!uiPrefs.petModel) return ''
+    const pet = petById(uiPrefs.petModel)
+    if (!pet) return ''
+    const local = petStatus.pets.find((item) => item.id === pet.id)
+    if (local?.model && petStatus.base) return `${petStatus.base}/${local.model}`
+    return petModelUrl(pet)
   }
 
   async function addAttachments() {
@@ -1757,6 +1776,14 @@
       </div>
     </div>
   {/if}
-  <Pet enabled={uiPrefs.petEnabled} />
+  {#if uiPrefs.petEnabled}
+    {#if uiPrefs.petModel && petById(uiPrefs.petModel)}
+      {#key currentPetUrl()}
+        <Live2DPet enabled url={currentPetUrl()} />
+      {/key}
+    {:else}
+      <Pet enabled />
+    {/if}
+  {/if}
   <Settings open={showSettings} connected={sidecarReady} info={settingsInfo} usageStats={usageStats} imageGenConfig={imageGenConfig} onSaveImageGenConfig={saveImageGenConfig} onclose={() => { showSettings = false; refreshPrefs() }} openDir={openDir} workspacePath={workspacePath} onChooseWorkspace={chooseWorkspace} onOpenRepo={() => void request('open_url', { url: 'https://github.com/TANGZZee/pi-my' })} providers={providers} onRefreshProviders={refreshProviders} onRefreshUsage={refreshUsage} onPrefsChange={refreshPrefs} rpc={request} />
 </div>

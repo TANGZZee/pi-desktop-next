@@ -19,6 +19,7 @@ export type Prefs = {
   theme: ThemePref
   skin: SkinId
   petEnabled: boolean
+  petModel: string
   notifyDone: boolean
   notifyConfirm: boolean
   gitTemplate: string
@@ -40,6 +41,7 @@ export const DEFAULT_PREFS: Prefs = {
   theme: 'light',
   skin: 'graphite',
   petEnabled: false,
+  petModel: '',
   notifyDone: false,
   notifyConfirm: true,
   gitTemplate: '',

@@ -14,6 +14,7 @@ import { createRetryExtension } from './retry-no-body.ts'
 import * as piConfig from './config.mjs'
 import * as eco from './ecosystem.mjs'
 import * as lan from './lan.mjs'
+import * as petServer from './pet-server.mjs'
 
 const sessions = new Map()
 let runtime
@@ -396,6 +397,7 @@ async function handle(request) {
       workspace = payload.cwd || workspace
       piConfig.applyAgentProxy(await piConfig.readProxy(agentDir))
       await ensureRuntime()
+      petServer.startPetServer(agentDir)
       reply(id, { ready: true, cwd: workspace, agentDir })
       return
     }
@@ -689,6 +691,14 @@ async function handle(request) {
     }
     if (type === 'eco_search_extensions') {
       reply(id, await eco.searchExtensions(payload.query))
+      return
+    }
+    if (type === 'eco_download_pet') {
+      reply(id, await eco.downloadPet(agentDir, payload.pet))
+      return
+    }
+    if (type === 'eco_pet_status') {
+      reply(id, await eco.listPets(agentDir, petServer.petServerBase()))
       return
     }
     if (type === 'eco_xue') {
