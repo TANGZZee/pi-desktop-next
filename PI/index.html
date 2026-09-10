@@ -4,21 +4,9 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Pi-My</title>
-    <style>
-      html, body, #app { height: 100%; margin: 0; background: #f4f4f4; color: #171717; font-family: "Segoe UI", sans-serif; }
-      #boot-error { padding: 24px; white-space: pre-wrap; }
-    </style>
   </head>
   <body>
     <div id="app"></div>
-    <script>
-      window.addEventListener('error', function (event) {
-        var box = document.getElementById('app')
-        if (box && !box.childElementCount) {
-          box.innerHTML = '<div id="boot-error">界面加载失败：' + (event.message || '未知错误') + '</div>'
-        }
-      })
-    </script>
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>

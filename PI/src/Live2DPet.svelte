@@ -1,7 +1,6 @@
 <script lang="ts">
   import { onDestroy, onMount } from 'svelte'
   import * as PIXI from 'pixi.js'
-  import { Live2DModel } from 'pixi-live2d-display'
 
   export let enabled = false
   export let url = ''
@@ -13,7 +12,7 @@
 
   let host: HTMLDivElement
   let app: PIXI.Application | undefined
-  let model: Live2DModel | undefined
+  let model: { width: number; height: number; scale: { set: (n: number) => void }; anchor: { set: (x: number, y: number) => void }; x: number; y: number; destroy: () => void } | undefined
   let loading = false
   let error = ''
 
@@ -30,7 +29,7 @@
     })
   }
 
-  function fitModel(m: Live2DModel) {
+  function fitModel(m: NonNullable<typeof model>) {
     const scale = Math.min(width / (m.width || width), height / (m.height || height)) * 0.92
     m.scale.set(scale)
     m.anchor.set(0.5, 0.5)
@@ -45,12 +44,15 @@
     try {
       await loadScript(CORE4)
       await loadScript(CORE2)
+      const { Live2DModel } = await import('pixi-live2d-display')
       Live2DModel.registerTicker(PIXI.Ticker)
       app = new PIXI.Application({ width, height, backgroundAlpha: 0, antialias: true, autoDensity: true })
-      host.appendChild(app.view)
+      host.appendChild(app.view as HTMLCanvasElement)
       model = await Live2DModel.from(url, { autoInteract: true })
-      fitModel(model)
-      app.stage.addChild(model)
+      if (model) {
+        fitModel(model)
+        app.stage.addChild(model as never)
+      }
     } catch (e) {
       error = e instanceof Error ? e.message : '加载失败'
     } finally {
