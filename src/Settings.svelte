@@ -717,7 +717,6 @@
                 <input type="checkbox" checked={prefs.petEnabled} on:change={(event) => commit({ petEnabled: (event.currentTarget as HTMLInputElement).checked })} />
                 <span>在窗口右下角显示桌宠</span>
               </label>
-              <p class="desc">Live2D 模型来自公开模型库，点击可互动；下载后缓存在本地。深色主题下依旧清晰。</p>
             </section>
             <section class="group">
               <h3>选择桌宠</h3>
@@ -737,7 +736,7 @@
                 {/each}
               </div>
               {#if petNotice}<p class="desc">{petNotice}</p>{/if}
-              <p class="desc">模型文件较大，首次「使用」会从 CDN 加载；点「下载缓存」后离线也能用。</p>
+              <p class="desc">首次使用会从网络加载，点「下载缓存」后离线可用。</p>
             </section>
           {:else if tab === 'lan'}
             <section class="group">
