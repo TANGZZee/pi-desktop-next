@@ -86,7 +86,24 @@ export const SPRITE_PETS: readonly PetModel[] = [
   { type: 'sprite', id: 'wangcai', name: 'Wangcai', description: '旺财小狗', spriteUrl: petdex('wangcai'), preview: petdex('wangcai'), frames: 6, frameW: 192, frameH: 208, duration: 820 },
   { type: 'sprite', id: 'usagi', name: 'Usagi', description: '兔兔', spriteUrl: petdex('usagi'), preview: petdex('usagi'), frames: 6, frameW: 192, frameH: 208, duration: 820 },
   { type: 'sprite', id: 'giratina', name: 'Giratina', description: '骑拉帝纳', spriteUrl: petdex('giratina'), preview: petdex('giratina'), frames: 6, frameW: 192, frameH: 208, duration: 820 },
-  { type: 'sprite', id: 'gardevoir', name: 'Gardevoir', description: '沙奈朵', spriteUrl: petdex('gardevoir'), preview: petdex('gardevoir'), frames: 6, frameW: 192, frameH: 208, duration: 820 }
+  { type: 'sprite', id: 'gardevoir', name: 'Gardevoir', description: '沙奈朵', spriteUrl: petdex('gardevoir'), preview: petdex('gardevoir'), frames: 6, frameW: 192, frameH: 208, duration: 820 },
+  { type: 'sprite', id: 'lulu-capybara-2', name: 'Lulu Capybara', description: '水豚', spriteUrl: petdex('lulu-capybara-2'), preview: petdex('lulu-capybara-2'), frames: 6, frameW: 192, frameH: 208, duration: 820 },
+  { type: 'sprite', id: 'jokebear-codexpet', name: 'Joke Bear', description: '玩笑熊', spriteUrl: petdex('jokebear-codexpet'), preview: petdex('jokebear-codexpet'), frames: 6, frameW: 192, frameH: 208, duration: 820 },
+  { type: 'sprite', id: 'tiko', name: 'Tiko', description: '蒂可', spriteUrl: petdex('tiko'), preview: petdex('tiko'), frames: 6, frameW: 192, frameH: 208, duration: 820 },
+  { type: 'sprite', id: 'noir-webling', name: 'Noir Webling', description: '黑网蛛', spriteUrl: petdex('noir-webling'), preview: petdex('noir-webling'), frames: 6, frameW: 192, frameH: 208, duration: 820 },
+  { type: 'sprite', id: 'capvolt', name: 'Capvolt', description: '电鼠', spriteUrl: petdex('capvolt'), preview: petdex('capvolt'), frames: 6, frameW: 192, frameH: 208, duration: 820 },
+  { type: 'sprite', id: 'kabi', name: 'Kabi', description: '卡比', spriteUrl: petdex('kabi'), preview: petdex('kabi'), frames: 6, frameW: 192, frameH: 208, duration: 820 },
+  { type: 'sprite', id: 'kaka-2', name: 'Kaka', description: '卡卡', spriteUrl: petdex('kaka-2'), preview: petdex('kaka-2'), frames: 6, frameW: 192, frameH: 208, duration: 820 },
+  { type: 'sprite', id: 'aurelion-sol-2', name: 'Aurelion Sol 2', description: '龙王', spriteUrl: petdex('aurelion-sol-2'), preview: petdex('aurelion-sol-2'), frames: 6, frameW: 192, frameH: 208, duration: 820 },
+  { type: 'sprite', id: 'cat-in-the-box-shaco', name: 'Shaco', description: '萨科', spriteUrl: petdex('cat-in-the-box-shaco'), preview: petdex('cat-in-the-box-shaco'), frames: 6, frameW: 192, frameH: 208, duration: 820 },
+  { type: 'sprite', id: 'aurelion-sol', name: 'Aurelion Sol', description: '龙王', spriteUrl: petdex('aurelion-sol'), preview: petdex('aurelion-sol'), frames: 6, frameW: 192, frameH: 208, duration: 820 },
+  { type: 'sprite', id: 'snow-plum-lillia', name: 'Lillia', description: '莉莉婭', spriteUrl: petdex('snow-plum-lillia'), preview: petdex('snow-plum-lillia'), frames: 6, frameW: 192, frameH: 208, duration: 820 },
+  { type: 'sprite', id: 'bee-teemo', name: 'Teemo', description: '提莫', spriteUrl: petdex('bee-teemo'), preview: petdex('bee-teemo'), frames: 6, frameW: 192, frameH: 208, duration: 820 },
+  { type: 'sprite', id: 'jolyne', name: 'Jolyne', description: '空条徐伦', spriteUrl: petdex('jolyne'), preview: petdex('jolyne'), frames: 6, frameW: 192, frameH: 208, duration: 820 },
+  { type: 'sprite', id: 'gappy', name: 'Gappy', description: '东方仗助', spriteUrl: petdex('gappy'), preview: petdex('gappy'), frames: 6, frameW: 192, frameH: 208, duration: 820 },
+  { type: 'sprite', id: 'dio', name: 'Dio', description: '迪奥', spriteUrl: petdex('dio'), preview: petdex('dio'), frames: 6, frameW: 192, frameH: 208, duration: 820 },
+  { type: 'sprite', id: 'jonathan', name: 'Jonathan', description: '乔纳森', spriteUrl: petdex('jonathan'), preview: petdex('jonathan'), frames: 6, frameW: 192, frameH: 208, duration: 820 },
+  { type: 'sprite', id: 'johnny-joestar', name: 'Johnny Joestar', description: '乔尼', spriteUrl: petdex('johnny-joestar'), preview: petdex('johnny-joestar'), frames: 6, frameW: 192, frameH: 208, duration: 820 }
 ]
 
 export const PETS: readonly PetModel[] = [...LIVE2D_PETS, ...SPRITE_PETS]
